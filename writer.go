@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"runtime"
 	"sync"
 )
@@ -139,6 +140,7 @@ func (r *writer) Close() (err error) {
 		return errors.New("close short copy")
 	}
 	// Insert length of remaining data into index
+	r.putUint64(uint64(math.MaxUint64))
 	r.putUint64(uint64(r.off))
 
 	buf = bytes.NewBuffer(r.cur[0:r.off])
@@ -175,9 +177,8 @@ func (r *writer) writer() {
 	defer close(r.exited)
 	for b := range r.write {
 		_ = <-b.hashDone
-		_, ok := r.index[b.sha1Hash]
+		match, ok := r.index[b.sha1Hash]
 		if !ok {
-			r.index[b.sha1Hash] = b.N
 			buf := bytes.NewBuffer(b.data)
 			n, err := io.Copy(r.blks, buf)
 			if err != nil {
@@ -187,15 +188,17 @@ func (r *writer) writer() {
 			if int(n) != len(b.data) {
 				panic("short write")
 			}
+			r.putUint64(0)
+		} else {
+			offset := b.N - match
+			if offset <= 0 {
+				panic("negative offset, should be impossible")
+			}
+			r.putUint64(uint64(offset))
 		}
-		n, err := r.idx.Write(b.sha1Hash[:])
-		if err != nil {
-			r.setErr(err)
-			return
-		}
-		if n != sha1.Size {
-			panic("short write")
-		}
+		// Update hash to latest match
+		r.index[b.sha1Hash] = b.N
+
 		// Done, reinsert buffer
 		r.buffers <- b
 	}
