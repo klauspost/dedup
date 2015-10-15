@@ -46,6 +46,10 @@ func TestReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	memuser := r.(dedup.MemUser)
+	t.Log("Maximum estimated use:", memuser.MaxMem(), "bytes")
+
 	out, err := ioutil.ReadAll(r)
 	if err != io.EOF && err != nil {
 		t.Fatal(err)

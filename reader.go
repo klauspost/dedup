@@ -9,6 +9,10 @@ import (
 	"math"
 )
 
+type MemUser interface {
+	MaxMem() int
+}
+
 //
 type fixedMemReader struct {
 	blocks       []*rblock
@@ -85,7 +89,11 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 		switch offset {
 		// new block
 		case 0:
-			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size)})
+			r, err := binary.ReadUvarint(idx)
+			if err != nil {
+				return err
+			}
+			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size - r)})
 
 		// Last block
 		case math.MaxUint64:
@@ -93,7 +101,7 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 			if err != nil {
 				return err
 			}
-			f.blocks = append(f.blocks, &rblock{readData: int(r)})
+			f.blocks = append(f.blocks, &rblock{readData: int(size - r)})
 			return nil
 		// Deduplicated block
 		default:
@@ -138,6 +146,34 @@ func (f *fixedMemReader) Read(b []byte) (int, error) {
 		f.curData = f.curData[n:]
 	}
 	return read, nil
+}
+
+// MaxMem returns the estimated maximum RAM usage needed to
+// unpack this content.
+func (f *fixedMemReader) MaxMem() int {
+	i := 1 // Current block
+	curUse := 0
+	maxUse := 0
+	for {
+		b := f.blocks[i]
+		if b.first == i {
+			curUse += b.readData
+		}
+		if curUse > maxUse {
+			maxUse = curUse
+		}
+
+		if b.last == i {
+			curUse -= b.readData
+		}
+
+		i++
+		// We read them all
+		if i == len(f.blocks) {
+			break
+		}
+	}
+	return maxUse
 }
 
 func (f *fixedMemReader) blockReader() {

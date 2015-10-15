@@ -105,6 +105,22 @@ func (r *fixedWriter) putUint64(v uint64) error {
 	return nil
 }
 
+// Split content, so a new block begins with next write
+func (r *fixedWriter) Split() {
+	if r.off == 0 {
+		return
+	}
+	b := <-r.buffers
+	// Swap block with current
+	r.cur, b.data = b.data[:r.size], r.cur[:r.off]
+	b.N = r.nblocks
+
+	r.input <- b
+	r.write <- b
+	r.nblocks++
+	r.off = 0
+}
+
 // Write contents to the deduplicator.
 func (r *fixedWriter) Write(b []byte) (n int, err error) {
 	written := 0
@@ -151,7 +167,7 @@ func (r *fixedWriter) Close() (err error) {
 
 	// Insert length of remaining data into index
 	r.putUint64(uint64(math.MaxUint64))
-	r.putUint64(uint64(r.off))
+	r.putUint64(uint64(r.size - r.off))
 
 	buf := bytes.NewBuffer(r.cur[0:r.off])
 	n, err := io.Copy(r.blks, buf)
@@ -203,6 +219,7 @@ func (r *fixedWriter) writer() {
 				panic("short write")
 			}
 			r.putUint64(0)
+			r.putUint64(uint64(r.size) - uint64(n))
 		} else {
 			offset := b.N - match
 			if offset <= 0 {
