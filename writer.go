@@ -5,8 +5,10 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"runtime"
 	"sync"
 )
@@ -202,6 +204,30 @@ func (r *writer) writer() {
 		// Done, reinsert buffer
 		r.buffers <- b
 	}
+}
+
+// Returns an approximate Birthday probability calculation
+// It uses the simplified calculation:
+//
+// p = k(k-1) / (2N)
+//
+// From http://preshing.com/20110504/hash-collision-probabilities/
+func BirthDayProblem(blocks, hashBytes int) string {
+	k := big.NewInt(int64(blocks))
+	km1 := big.NewInt(int64(blocks - 1))
+	ksq := k.Mul(k, km1)
+	n := big.NewInt(0)
+	n = n.Exp(big.NewInt(2), big.NewInt(int64(hashBytes)*8), nil)
+	twoN := n.Add(n, n)
+	var t, t2 big.Rat
+	var res *big.Rat
+	//
+	res = t.SetFrac(ksq, twoN)
+	f64, _ := res.Float64()
+	inv := t2.Inv(res).FloatString(0)
+	invs := fmt.Sprintf(" ~ 1/%s ~ %v", inv, f64)
+
+	return "Collision probability is" + invs
 }
 
 /*

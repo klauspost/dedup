@@ -9,6 +9,8 @@ import (
 
 	"io/ioutil"
 
+	"crypto/sha1"
+
 	"github.com/klauspost/dedup"
 )
 
@@ -44,6 +46,7 @@ func TestWriter(t *testing.T) {
 	}
 	removed := ((totalinput) - data.Len()) / size
 
+	t.Log(dedup.BirthDayProblem(totalinput/size, sha1.Size))
 	t.Log("Index size:", idx.Len())
 	t.Log("Data size:", data.Len())
 	// We should get at least 50 blocks
