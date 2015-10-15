@@ -14,40 +14,48 @@ type writer struct {
 	blks    io.Writer
 	idx     io.Writer
 	size    int
-	index   map[[sha1.Size]byte]struct{}
+	index   map[[sha1.Size]byte]int
 	input   chan *block
 	write   chan *block
 	exited  chan struct{}
 	cur     []byte
 	off     int
-	buffers sync.Pool
+	buffers chan *block
 	vari64  []byte
 	err     error
 	mu      sync.Mutex
+	nblocks int
 }
 
 type block struct {
 	data     []byte
 	sha1Hash [sha1.Size]byte
 	hashDone chan error
+	N        int
 }
 
 var ErrSizeTooSmall = errors.New("block size too small")
 
 func NewWriter(index io.Writer, blocks io.Writer, size uint) (io.WriteCloser, error) {
 	ncpu := runtime.GOMAXPROCS(0)
-	r := &writer{
-		blks:   blocks,
-		idx:    index,
-		size:   int(size),
-		index:  make(map[[sha1.Size]byte]struct{}),
-		input:  make(chan *block, ncpu*4),
-		write:  make(chan *block, ncpu*4),
-		exited: make(chan struct{}, 0),
-		cur:    make([]byte, size),
-		vari64: make([]byte, binary.MaxVarintLen64),
+	// For small block sizes we need to keep a pretty big buffer to keep input fed.
+	// Constant below appears to be sweet spot measured with 4K blocks.
+	var bufmul = 256 << 10 / int(size)
+	if bufmul < 2 {
+		bufmul = 2
 	}
-	r.buffers.New = func() interface{} { return make([]byte, size) }
+	r := &writer{
+		blks:    blocks,
+		idx:     index,
+		size:    int(size),
+		index:   make(map[[sha1.Size]byte]int),
+		input:   make(chan *block, ncpu*bufmul),
+		write:   make(chan *block, ncpu*bufmul),
+		exited:  make(chan struct{}, 0),
+		cur:     make([]byte, size),
+		vari64:  make([]byte, binary.MaxVarintLen64),
+		buffers: make(chan *block, ncpu*bufmul),
+	}
 
 	if r.size <= sha1.Size {
 		return nil, ErrSizeTooSmall
@@ -59,6 +67,10 @@ func NewWriter(index io.Writer, blocks io.Writer, size uint) (io.WriteCloser, er
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {
 		go r.hasher()
+	}
+	// Insert the buffers we will use
+	for i := 0; i < ncpu*bufmul; i++ {
+		r.buffers <- &block{data: make([]byte, size), hashDone: make(chan error, 1)}
 	}
 	go r.writer()
 	return r, nil
@@ -85,14 +97,24 @@ func (r *writer) Write(b []byte) (n int, err error) {
 		r.off += n
 		written += n
 		if r.off == r.size {
-			b := &block{data: r.cur, hashDone: make(chan error, 1)}
+			b := <-r.buffers
+			// Swap block with current
+			r.cur, b.data = b.data, r.cur
+			b.N = r.nblocks
+
 			r.input <- b
 			r.write <- b
-			r.cur = r.buffers.Get().([]byte)
+			r.nblocks++
 			r.off = 0
 		}
 	}
 	return written, nil
+}
+
+func (r *writer) setErr(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
 }
 
 var emptyHash = [sha1.Size]byte{}
@@ -138,7 +160,8 @@ func (r *writer) hasher() {
 		hasher.Reset()
 		n, err := io.Copy(hasher, buf)
 		if err != nil {
-			panic(err.Error())
+			r.setErr(err)
+			return
 		}
 		if int(n) != len(b.data) {
 			panic("short write")
@@ -154,11 +177,12 @@ func (r *writer) writer() {
 		_ = <-b.hashDone
 		_, ok := r.index[b.sha1Hash]
 		if !ok {
-			r.index[b.sha1Hash] = struct{}{}
+			r.index[b.sha1Hash] = b.N
 			buf := bytes.NewBuffer(b.data)
 			n, err := io.Copy(r.blks, buf)
 			if err != nil {
-				panic(err.Error())
+				r.setErr(err)
+				return
 			}
 			if int(n) != len(b.data) {
 				panic("short write")
@@ -166,12 +190,14 @@ func (r *writer) writer() {
 		}
 		n, err := r.idx.Write(b.sha1Hash[:])
 		if err != nil {
-			panic(err.Error())
+			r.setErr(err)
+			return
 		}
 		if n != sha1.Size {
 			panic("short write")
 		}
-		r.buffers.Put(b.data)
+		// Done, reinsert buffer
+		r.buffers <- b
 	}
 }
 
