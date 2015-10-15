@@ -47,6 +47,7 @@ func TestWriter(t *testing.T) {
 	t.Log(dedup.BirthDayProblem(totalinput / size))
 	t.Log("Index size:", idx.Len())
 	t.Log("Data size:", data.Len())
+	t.Log("Removed", removed, "blocks")
 	// We should get at least 50 blocks
 	if removed < 50 {
 		t.Fatal("didn't remove at least 50 blocks")
@@ -54,7 +55,6 @@ func TestWriter(t *testing.T) {
 	if removed > 60 {
 		t.Fatal("removed unreasonable high amount of blocks")
 	}
-	t.Log("Removed", removed, "blocks")
 }
 
 func BenchmarkWriter64K(t *testing.B) {

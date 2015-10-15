@@ -11,17 +11,23 @@ import (
 
 //
 type fixedMemReader struct {
-	blocks []*rblock
-	in     io.Reader
-	size   int
+	blocks       []*rblock
+	in           io.Reader
+	size         int
+	curBlock     int
+	curData      []byte
+	ready        chan *rblock
+	closeReader  chan struct{}
+	readerClosed chan struct{}
 }
 
 // rblock contains read information about a single block
 type rblock struct {
 	data     []byte
-	readData uint64
-	first    int // Index of first occurence
-	last     int // Index of last occurence
+	readData int
+	first    int   // Index of first occurence
+	last     int   // Index of last occurence
+	err      error // Read error?
 }
 
 func (r *rblock) String() string {
@@ -34,7 +40,13 @@ func (r *rblock) String() string {
 var ErrUnknownFormat = errors.New("unknown index format")
 
 func NewReader(index io.Reader, blocks io.Reader) (io.ReadCloser, error) {
-	f := &fixedMemReader{in: blocks}
+	f := &fixedMemReader{
+		in:           blocks,
+		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
+		closeReader:  make(chan struct{}, 0),
+		readerClosed: make(chan struct{}, 0),
+		curBlock:     0,
+	}
 	idx := bufio.NewReader(index)
 	format, err := binary.ReadUvarint(idx)
 	if err != nil {
@@ -47,7 +59,9 @@ func NewReader(index io.Reader, blocks io.Reader) (io.ReadCloser, error) {
 	default:
 		err = ErrUnknownFormat
 	}
-	fmt.Println("%v", f.blocks)
+	go f.blockReader()
+
+	//fmt.Println(f.blocks)
 	return f, err
 }
 
@@ -71,7 +85,7 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 		switch offset {
 		// new block
 		case 0:
-			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: size})
+			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size)})
 
 		// Last block
 		case math.MaxUint64:
@@ -79,7 +93,7 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 			if err != nil {
 				return err
 			}
-			f.blocks = append(f.blocks, &rblock{readData: r})
+			f.blocks = append(f.blocks, &rblock{readData: int(r)})
 			return nil
 		// Deduplicated block
 		default:
@@ -97,9 +111,78 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 }
 
 func (f *fixedMemReader) Read(b []byte) (int, error) {
-	return 0, nil
+	read := 0
+	for len(b) > 0 {
+		// Read next
+		if len(f.curData) == 0 {
+			f.curBlock++
+			next, ok := <-f.ready
+			if !ok {
+				return read, io.EOF
+			}
+			if next.err != nil {
+				return read, next.err
+			}
+			f.curData = next.data
+			// We don't want to keep it, if this is the last block
+			if f.curBlock == next.last {
+				next.data = nil
+			}
+			if len(f.curData) == 0 {
+				continue
+			}
+		}
+		n := copy(b, f.curData)
+		read += n
+		b = b[n:]
+		f.curData = f.curData[n:]
+	}
+	return read, nil
+}
+
+func (f *fixedMemReader) blockReader() {
+	defer close(f.readerClosed)
+	defer close(f.ready)
+
+	i := 1 // Current block
+	totalRead := 0
+	for {
+		b := f.blocks[i]
+		// Read it?
+		if len(b.data) != b.readData {
+			b.data = make([]byte, b.readData)
+			n, err := io.ReadFull(f.in, b.data)
+			if err != nil {
+				b.err = err
+			} else if n != b.readData {
+				b.err = io.ErrUnexpectedEOF
+			}
+			totalRead += n
+		}
+		// Send or close
+		select {
+		case <-f.closeReader:
+			return
+		case f.ready <- b:
+		}
+		// Exit because of an error
+		if b.err != nil {
+			return
+		}
+		i++
+		// We read them all
+		if i == len(f.blocks) {
+			return
+		}
+	}
+	return
 }
 
 func (f *fixedMemReader) Close() error {
+	select {
+	case <-f.readerClosed:
+	case f.closeReader <- struct{}{}:
+		<-f.readerClosed
+	}
 	return nil
 }

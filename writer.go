@@ -149,21 +149,12 @@ func (r *fixedWriter) Close() (err error) {
 	close(r.write)
 	<-r.exited
 
-	// Insert empty hash into index to indicate EOF
-	buf := bytes.NewBuffer(emptyHash[:])
-	n, err := io.Copy(r.idx, buf)
-	if err != nil {
-		return err
-	}
-	if n != hasher.Size {
-		return errors.New("close short copy")
-	}
 	// Insert length of remaining data into index
 	r.putUint64(uint64(math.MaxUint64))
 	r.putUint64(uint64(r.off))
 
-	buf = bytes.NewBuffer(r.cur[0:r.off])
-	n, err = io.Copy(r.blks, buf)
+	buf := bytes.NewBuffer(r.cur[0:r.off])
+	n, err := io.Copy(r.blks, buf)
 	if err != nil {
 		return err
 	}
