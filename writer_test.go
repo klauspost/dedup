@@ -48,7 +48,10 @@ func TestWriter(t *testing.T) {
 	t.Log("Data size:", data.Len())
 	// We should get at least 50 blocks
 	if removed < 50 {
-		t.Log()
+		t.Fatal("didn't remove at least 50 blocks")
+	}
+	if removed > 60 {
+		t.Fatal("removed unreasonable high amount of blocks")
 	}
 	t.Log("Removed", removed, "blocks")
 }
