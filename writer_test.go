@@ -9,8 +9,6 @@ import (
 
 	"io/ioutil"
 
-	"crypto/sha1"
-
 	"github.com/klauspost/dedup"
 )
 
@@ -35,7 +33,7 @@ func TestWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, size)
+	w, err := dedup.NewFixed(&idx, &data, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +44,7 @@ func TestWriter(t *testing.T) {
 	}
 	removed := ((totalinput) - data.Len()) / size
 
-	t.Log(dedup.BirthDayProblem(totalinput/size, sha1.Size))
+	t.Log(dedup.BirthDayProblem(totalinput / size))
 	t.Log("Index size:", idx.Len())
 	t.Log("Data size:", data.Len())
 	// We should get at least 50 blocks
@@ -81,7 +79,7 @@ func BenchmarkWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewFixed(ioutil.Discard, ioutil.Discard, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -112,11 +110,30 @@ func BenchmarkWriter4K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewFixed(ioutil.Discard, ioutil.Discard, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestBirthday(t *testing.T) {
+	t.Log("Hash size is", dedup.HashSize*8, "bits")
+	t.Log("1GiB, 1KiB blocks:")
+	t.Log(dedup.BirthDayProblem((1 << 30) / (1 << 10)))
+	t.Log("It will use", dedup.FixedMemUse((1<<30)/(1<<10))>>20, "MiB memory")
+	t.Log("1TiB, 4KiB blocks:")
+	t.Log(dedup.BirthDayProblem((1 << 40) / (4 << 10)))
+	t.Log("It will use", dedup.FixedMemUse((1<<40)/(4<<10))>>20, "MiB memory")
+	t.Log("1PiB, 4KiB blocks:")
+	t.Log(dedup.BirthDayProblem((1 << 50) / (4 << 10)))
+	t.Log("It will use", dedup.FixedMemUse((1<<50)/(4<<10))>>20, "MiB memory")
+	t.Log("1EiB, 64KiB blocks:")
+	t.Log(dedup.BirthDayProblem((1 << 60) / (64 << 10)))
+	t.Log("It will use", dedup.FixedMemUse((1<<60)/(64<<10))>>20, "MiB memory")
+	t.Log("1EiB, 1KiB blocks:")
+	t.Log(dedup.BirthDayProblem((1 << 60) / (1 << 10)))
+	t.Log("It will use", dedup.FixedMemUse((1<<60)/(1<<10))>>20, "MiB memory")
 }
