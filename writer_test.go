@@ -33,7 +33,7 @@ func TestWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewFixed(&idx, &data, size)
+	w, err := dedup.NewFixedWriter(&idx, &data, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func BenchmarkWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewFixed(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewFixedWriter(ioutil.Discard, ioutil.Discard, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -110,7 +110,7 @@ func BenchmarkWriter4K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewFixed(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewFixedWriter(ioutil.Discard, ioutil.Discard, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {

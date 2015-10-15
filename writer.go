@@ -51,7 +51,7 @@ var ErrSizeTooSmall = errors.New("block size too small")
 // The index stream will contain information about which blocks are deduplicated
 // and the block stream will contain uncompressed data blocks.
 // The returned writer must be closed to flush the remaining data.
-func NewFixed(index io.Writer, blocks io.Writer, size uint) (io.WriteCloser, error) {
+func NewFixedWriter(index io.Writer, blocks io.Writer, size uint) (io.WriteCloser, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
