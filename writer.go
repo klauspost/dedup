@@ -387,6 +387,95 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 	return len(b), nil
 }
 
+// Split on zpaq hash, file signatures and maximum block size.
+func (z *zpaqWriter) writeFile(r *writer, b []byte) (int, error) {
+	c1 := z.c1
+
+	for i, c := range b {
+		split := false
+		v := sigmap[c]
+		if len(v) > 0 && i < len(b)-6 {
+			for _, s := range v {
+				if bytes.Compare(s, b[i+1:i+6]) == 0 {
+					split = true
+				}
+			}
+		}
+		if c == z.o1[c1] {
+			z.h = (z.h + uint32(c) + 1) * 314159265
+		} else {
+			z.h = (z.h + uint32(c) + 1) * 271828182
+		}
+		z.o1[c1] = c
+		c1 = c
+		r.cur[r.off] = c
+		r.off++
+
+		// Filled the buffer? Send it off!
+		if r.off >= z.minFragment && (z.h < z.minHash || split || r.off >= z.maxFragment) {
+			b := <-r.buffers
+			// Swap block with current
+			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
+			b.N = r.nblocks
+
+			r.input <- b
+			r.write <- b
+			r.nblocks++
+			r.off = 0
+			z.h = 0
+			c1 = 0
+		}
+	}
+	z.c1 = c1
+	return len(b), nil
+}
+
+// Split on maximum size and file signatures only.
+func fileSplitOnly(r *writer, b []byte) (int, error) {
+	for i, c := range b {
+		split := false
+		v := sigmap[c]
+		if len(v) > 0 && i < len(b)-6 {
+			for _, s := range v {
+				if bytes.Compare(s, b[i+1:i+6]) == 0 {
+					split = true
+				}
+			}
+		}
+		r.cur[r.off] = c
+		r.off++
+
+		// Filled the buffer? Send it off!
+		if split || r.off >= r.size {
+			b := <-r.buffers
+			// Swap block with current
+			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
+			b.N = r.nblocks
+
+			r.input <- b
+			r.write <- b
+			r.nblocks++
+			r.off = 0
+		}
+	}
+	return len(b), nil
+}
+
+//	4 times faster than map[byte][][]byte
+var sigmap [256][][]byte
+
+func init() {
+	for _, sig := range signatures {
+		l := sig[0]
+		slice := sig[1 : 1+l]
+		x := sigmap[slice[0]]
+		dst := make([]byte, l-1)
+		copy(dst, slice[1:])
+		x = append(x, dst)
+		sigmap[slice[0]] = x
+	}
+}
+
 // File start signatures
 // 8 bytes, 1 byte length (1 to 7), 1-7 bytes identifier literals, 7-length padding.
 var signatures = [][8]byte{
