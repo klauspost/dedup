@@ -6,8 +6,8 @@ Streaming de-duplication package
 [![Build Status](https://travis-ci.org/klauspost/dedup.svg?branch=master)](https://travis-ci.org/klauspost/dedup)
 [![GoDoc][1]][2]
 
-[1]: https://godoc.org/github.com/klauspost/dedup/server?status.svg
-[2]: https://godoc.org/github.com/klauspost/dedup/server
+[1]: https://godoc.org/github.com/klauspost/dedup?status.svg
+[2]: https://godoc.org/github.com/klauspost/dedup
 
 ## Why is this not compression?
 
