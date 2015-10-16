@@ -12,7 +12,7 @@ import (
 	"github.com/klauspost/dedup"
 )
 
-func TestWriter(t *testing.T) {
+func TestFixedWriter(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
 	input := &bytes.Buffer{}
@@ -57,7 +57,48 @@ func TestWriter(t *testing.T) {
 	}
 }
 
-func BenchmarkWriter64K(t *testing.B) {
+func TestDynamicWriter(t *testing.T) {
+	idx := bytes.Buffer{}
+	data := bytes.Buffer{}
+	input := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewDynamicWriter(&idx, &data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ((totalinput) - data.Len()) / size
+
+	t.Log("Dynamic Index size:", idx.Len())
+	t.Log("Dynamic Data size:", data.Len())
+	t.Log("Removed", removed, "blocks")
+	// We don't know how many, but it should remove some blocks
+	if removed < 10 {
+		t.Fatal("didn't remove at least 10 blocks")
+	}
+}
+
+func BenchmarkFixedWriter64K(t *testing.B) {
 	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
@@ -88,7 +129,7 @@ func BenchmarkWriter64K(t *testing.B) {
 	}
 }
 
-func BenchmarkWriter4K(t *testing.B) {
+func BenchmarkFixedWriter4K(t *testing.B) {
 	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
@@ -96,7 +137,7 @@ func BenchmarkWriter4K(t *testing.B) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const size = 8 << 10
+	const size = 4 << 10
 	b := input.Bytes()
 	// Create some duplicates
 	for i := 0; i < 500; i++ {
@@ -111,6 +152,38 @@ func BenchmarkWriter4K(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewFixedWriter(ioutil.Discard, ioutil.Discard, size)
+		io.Copy(w, input)
+		err = w.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Maximum block size:64k
+func BenchmarkDynamicWriter64K(t *testing.B) {
+	input := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		input = bytes.NewBuffer(b)
+		w, _ := dedup.NewDynamicWriter(ioutil.Discard, ioutil.Discard, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {

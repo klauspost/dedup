@@ -42,6 +42,67 @@ func TestReader(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Log("Fixed Index size:", idx.Len())
+	t.Log("Fixed Data size:", data.Len())
+
+	r, err := dedup.NewReader(&idx, &data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	memuser := r.(dedup.MemUser)
+	t.Log("Maximum estimated use:", memuser.MaxMem(), "bytes")
+
+	out, err := ioutil.ReadAll(r)
+	if err != io.EOF && err != nil {
+		t.Fatal(err)
+	}
+	if len(b) != len(out) {
+		t.Fatalf("Expected len %d, got %d", len(b), len(out))
+	}
+	if bytes.Compare(b, out) != 0 {
+		t.Fatal("Output mismatch")
+	}
+	err = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDynamicRoundtrip(t *testing.T) {
+	idx := bytes.Buffer{}
+	data := bytes.Buffer{}
+	input := &bytes.Buffer{}
+
+	const totalinput = 10<<20 + 65
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 256 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewDynamicWriter(&idx, &data, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("Dynamic Index size:", idx.Len())
+	t.Log("Dynamic Data size:", data.Len())
+
 	r, err := dedup.NewReader(&idx, &data)
 	if err != nil {
 		t.Fatal(err)
