@@ -184,11 +184,11 @@ func (r *fixedWriter) Close() (err error) {
 // hasher will hash incoming blocks
 // and signal the writer when done.
 func (r *fixedWriter) hasher() {
-	hasher := hasher.New()
+	h := hasher.New()
 	for b := range r.input {
 		buf := bytes.NewBuffer(b.data)
-		hasher.Reset()
-		n, err := io.Copy(hasher, buf)
+		h.Reset()
+		n, err := io.Copy(h, buf)
 		if err != nil {
 			r.setErr(err)
 			return
@@ -196,7 +196,7 @@ func (r *fixedWriter) hasher() {
 		if int(n) != len(b.data) {
 			panic("short write")
 		}
-		_ = hasher.Sum(b.sha1Hash[:0])
+		_ = h.Sum(b.sha1Hash[:0])
 		b.hashDone <- nil
 	}
 }
