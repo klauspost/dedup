@@ -3,6 +3,12 @@ Streaming de-duplication package
 
 # IN DEVELOPMENT - do not use (yet).
 
+[![Build Status](https://travis-ci.org/klauspost/dedup.svg?branch=master)](https://travis-ci.org/klauspost/dedup)
+[![GoDoc][1]][2]
+
+[1]: https://godoc.org/github.com/klauspost/dedup/server?status.svg
+[2]: https://godoc.org/github.com/klauspost/dedup/server
+
 ## Why is this not compression?
 
 Deduplication does the same as compression but on a higher level. Instead of looking for small matches, it attempts to find the "bigger" matches. It will attempt to match and eliminate blocks where all content matches. 
