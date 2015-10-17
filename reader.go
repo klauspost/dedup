@@ -37,8 +37,8 @@ type fixedMemReader struct {
 type rblock struct {
 	data     []byte
 	readData int
-	first    int   // Index of first occurence
-	last     int   // Index of last occurence
+	first    int   // Index of first occurrence
+	last     int   // Index of last occurrence
 	err      error // Read error?
 }
 

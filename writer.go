@@ -383,8 +383,6 @@ func (w *writer) blockWriter() {
 
 // blockStreamWriter will write blocks and indexes to the output stream
 // and recycle the buffers.
-// TODO: There is no reason for a complete hash table, we could delete them
-// once they are to old.
 func (w *writer) blockStreamWriter() {
 	defer close(w.exited)
 	for b := range w.write {
@@ -415,6 +413,14 @@ func (w *writer) blockStreamWriter() {
 		// Update hash to latest match
 		w.index[b.sha1Hash] = b.N
 
+		// Purge old entries once in a while
+		if b.N&127 == 127 {
+			for k, v := range w.index {
+				if (v - match) > w.maxBlocks {
+					delete(w.index, k)
+				}
+			}
+		}
 		// Done, reinsert buffer
 		w.buffers <- b
 	}
@@ -471,7 +477,7 @@ func BirthDayProblem(blocks int) string {
 }
 
 // Returns an approximate memory use in bytes for compression
-// for the given number of blocks
+// for the given number of blocks with NewWriter.
 func FixedMemUse(blocks int) int64 {
 	bl := big.NewInt(int64(blocks))
 	perBlock := big.NewInt(int64(HashSize + 8 /*int64*/ + 24 /* map entry*/))
