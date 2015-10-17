@@ -9,7 +9,8 @@ import (
 	"math"
 )
 
-type MemUser interface {
+type Reader interface {
+	io.ReadCloser
 	MaxMem() int
 }
 
@@ -17,7 +18,9 @@ type MemUser interface {
 type fixedMemReader struct {
 	blocks       []*rblock
 	in           io.Reader
+	stream       *bufio.Reader
 	size         int
+	maxLength    uint64 // Maxmimum backreference count
 	curBlock     int
 	curData      []byte
 	ready        chan *rblock
@@ -43,7 +46,7 @@ func (r *rblock) String() string {
 
 var ErrUnknownFormat = errors.New("unknown index format")
 
-func NewReader(index io.Reader, blocks io.Reader) (io.ReadCloser, error) {
+func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 	f := &fixedMemReader{
 		in:           blocks,
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
@@ -67,6 +70,35 @@ func NewReader(index io.Reader, blocks io.Reader) (io.ReadCloser, error) {
 
 	//fmt.Println(f.blocks)
 	return f, err
+}
+
+func NewStreamReader(in io.Reader) (Reader, error) {
+	f := &fixedMemReader{
+		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
+		closeReader:  make(chan struct{}, 0),
+		readerClosed: make(chan struct{}, 0),
+		curBlock:     0,
+	}
+	br := bufio.NewReader(in)
+	format, err := binary.ReadUvarint(br)
+	if err != nil {
+		return nil, err
+	}
+
+	switch format {
+	case 2:
+		err = f.readFormat2(br)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, ErrUnknownFormat
+	}
+
+	f.stream = br
+	go f.streamReader()
+
+	return f, nil
 }
 
 func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
@@ -118,6 +150,27 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 	return nil
 }
 
+func (f *fixedMemReader) readFormat2(rd io.ByteReader) error {
+	size, err := binary.ReadUvarint(rd)
+	if err != nil {
+		return err
+	}
+	if size < MinBlockSize {
+		return ErrSizeTooSmall
+	}
+	f.size = int(size)
+
+	maxLength, err := binary.ReadUvarint(rd)
+	if err != nil {
+		return err
+	}
+	if maxLength < 1 {
+		return ErrMaxBlocksTooSmall
+	}
+	f.maxLength = maxLength
+	return nil
+}
+
 func (f *fixedMemReader) Read(b []byte) (int, error) {
 	read := 0
 	for len(b) > 0 {
@@ -151,6 +204,9 @@ func (f *fixedMemReader) Read(b []byte) (int, error) {
 // MaxMem returns the estimated maximum RAM usage needed to
 // unpack this content.
 func (f *fixedMemReader) MaxMem() int {
+	if f.maxLength > 0 {
+		return int(f.maxLength) * f.size
+	}
 	i := 1 // Current block
 	curUse := 0
 	maxUse := 0
@@ -210,6 +266,79 @@ func (f *fixedMemReader) blockReader() {
 		if i == len(f.blocks) {
 			return
 		}
+	}
+	return
+}
+
+func (f *fixedMemReader) streamReader() {
+	defer close(f.readerClosed)
+	defer close(f.ready)
+
+	totalRead := 0
+
+	// Create backreference buffers
+	blocks := make([][]byte, f.maxLength)
+	for i := range blocks {
+		blocks[i] = make([]byte, f.size)
+	}
+
+	i := uint64(1) // Current block
+	for {
+		b := &rblock{}
+		lastBlock := false
+
+		b.err = func() error {
+			offset, err := binary.ReadUvarint(f.stream)
+			if err != nil {
+				return err
+			}
+			// Read it?
+			if offset == 0 || offset == math.MaxUint64 {
+				s, err := binary.ReadUvarint(f.stream)
+				if err != nil {
+					return err
+				}
+				size := f.size - int(s)
+				if size > f.size || size <= 0 {
+					return fmt.Errorf("invalid size encountered at block %d, size was %d", i, size)
+				}
+				b.data = make([]byte, size)
+				n, err := io.ReadFull(f.stream, b.data)
+				if err != nil {
+					return err
+				} else if n != len(b.data) {
+					return io.ErrUnexpectedEOF
+				}
+				totalRead += n
+				if offset == math.MaxUint64 {
+					lastBlock = true
+				}
+			} else {
+				if offset > f.maxLength {
+					return fmt.Errorf("invalid offset encountered at block %d, offset was %d", i, offset)
+				}
+				pos := i - offset
+				if pos <= 0 {
+					return fmt.Errorf("invalid offset encountered at block %d, offset was %d", i, offset)
+				}
+				src := blocks[pos%f.maxLength]
+				b.data = src
+			}
+
+			blocks[i%f.maxLength] = b.data
+			return nil
+		}()
+		// Send or close
+		select {
+		case <-f.closeReader:
+			return
+		case f.ready <- b:
+		}
+		// Exit because of an error
+		if b.err != nil || lastBlock {
+			return
+		}
+		i++
 	}
 	return
 }

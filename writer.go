@@ -20,12 +20,16 @@ type Writer interface {
 	Split()
 }
 
+// Size of the underlying hash in bytes for those interested
+const HashSize = hasher.Size
+
+// The smallest "maximum" block size allowed
+const MinBlockSize = 512
+
+// Deduplication mode used to determine how input is split.
 type Mode int
 
 const (
-	// Size of the underlying hash in bytes for those interested
-	HashSize = hasher.Size
-
 	// Fixed block size
 	//
 	// This is by far the fastest mode, and checks for duplicates
@@ -50,22 +54,24 @@ const (
 )
 
 type writer struct {
-	blks    io.Writer                 // Block data writer
-	idx     io.Writer                 // Index writer
-	size    int                       // Block size
-	index   map[[hasher.Size]byte]int // Known hashes and their index
-	input   chan *block               // Channel containing blocks to be hashed
-	write   chan *block               // Channel containing (ordered) blocks to be written
-	exited  chan struct{}             // Closed when the writer exits.
-	cur     []byte                    // Current block being written
-	off     int                       // Write offset in current block
-	buffers chan *block               // Buffers ready for re-use.
-	vari64  []byte                    // Temporary buffer for writing varints
-	err     error                     // Error state
-	mu      sync.Mutex                // Mutex for error state
-	nblocks int                       // Current block number. First block is 1.
-	writer  func(*writer, []byte) (int, error)
-	flush   func(*writer) error
+	blks      io.Writer                 // Block data writer
+	idx       io.Writer                 // Index writer
+	maxSize   int                       // Maximum Block size
+	maxBlocks int                       // Maximum backreference distance
+	index     map[[hasher.Size]byte]int // Known hashes and their index
+	input     chan *block               // Channel containing blocks to be hashed
+	write     chan *block               // Channel containing (ordered) blocks to be written
+	exited    chan struct{}             // Closed when the writer exits.
+	cur       []byte                    // Current block being written
+	off       int                       // Write offset in current block
+	buffers   chan *block               // Buffers ready for re-use.
+	vari64    []byte                    // Temporary buffer for writing varints
+	err       error                     // Error state
+	mu        sync.Mutex                // Mutex for error state
+	nblocks   int                       // Current block number. First block is 1.
+	writer    func(*writer, []byte) (int, error)
+	flush     func(*writer) error
+	close     func(*writer) error
 }
 
 // block contains information about a single block
@@ -87,23 +93,23 @@ var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least
 // and the block stream will contain uncompressed data blocks.
 // This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
-func NewWriter(index io.Writer, blocks io.Writer, mode Mode, max uint) (Writer, error) {
+func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
-	var bufmul = 256 << 10 / int(max)
+	var bufmul = 256 << 10 / int(maxSize)
 	if bufmul < 2 {
 		bufmul = 2
 	}
-	r := &writer{
+	w := &writer{
 		blks:    blocks,
 		idx:     index,
-		size:    int(max),
+		maxSize: int(maxSize),
 		index:   make(map[[hasher.Size]byte]int),
 		input:   make(chan *block, ncpu*bufmul),
 		write:   make(chan *block, ncpu*bufmul),
 		exited:  make(chan struct{}, 0),
-		cur:     make([]byte, max),
+		cur:     make([]byte, maxSize),
 		vari64:  make([]byte, binary.MaxVarintLen64),
 		buffers: make(chan *block, ncpu*bufmul),
 		nblocks: 1,
@@ -111,37 +117,109 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, max uint) (Writer, 
 
 	switch mode {
 	case ModeFixed:
-		w := &fixedWriter{}
-		r.writer = w.write
+		fw := &fixedWriter{}
+		w.writer = fw.write
 	case ModeDynamic:
-		w := newZpaqWriter(max)
-		r.writer = w.write
+		zw := newZpaqWriter(maxSize)
+		w.writer = zw.write
 	case ModeDynamicSignatures:
-		w := newZpaqWriter(max)
-		r.writer = w.writeFile
+		zw := newZpaqWriter(maxSize)
+		w.writer = zw.writeFile
 	case ModeSignaturesOnly:
-		r.writer = fileSplitOnly
+		w.writer = fileSplitOnly
 	default:
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
 
-	if r.size < 512 {
+	if w.maxSize < MinBlockSize {
 		return nil, ErrSizeTooSmall
 	}
 
-	r.putUint64(1)           // Format
-	r.putUint64(uint64(max)) // Maximum block size
+	w.close = idxClose
+	w.putUint64(1)               // Format
+	w.putUint64(uint64(maxSize)) // Maximum block size
 
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {
-		go r.hasher()
+		go w.hasher()
 	}
 	// Insert the buffers we will use
 	for i := 0; i < ncpu*bufmul; i++ {
-		r.buffers <- &block{data: make([]byte, max), hashDone: make(chan error, 1)}
+		w.buffers <- &block{data: make([]byte, maxSize), hashDone: make(chan error, 1)}
 	}
-	go r.blockWriter()
-	return r, nil
+	go w.blockWriter()
+	return w, nil
+}
+
+// ErrSizeTooSmall is returned if the requested block size is smaller than
+// hash size.
+var ErrMaxBlocksTooSmall = errors.New("there must be at least 1 block backreference")
+
+// NewWriter will create a deduplicator that will split the contents written
+// to it into blocks and de-duplicate these.
+// The output is delivered as a single stream.
+// This function returns data that is compatible with the NewReader function.
+// The returned writer must be closed to flush the remaining data.
+func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
+	ncpu := runtime.GOMAXPROCS(0)
+	// For small block sizes we need to keep a pretty big buffer to keep input fed.
+	// Constant below appears to be sweet spot measured with 4K blocks.
+	var bufmul = 256 << 10 / int(maxSize)
+	if bufmul < 2 {
+		bufmul = 2
+	}
+	if maxBlocks < 1 {
+		return nil, ErrMaxBlocksTooSmall
+	}
+	w := &writer{
+		idx:       out,
+		maxSize:   int(maxSize),
+		index:     make(map[[hasher.Size]byte]int),
+		input:     make(chan *block, ncpu*bufmul),
+		write:     make(chan *block, ncpu*bufmul),
+		exited:    make(chan struct{}, 0),
+		cur:       make([]byte, maxSize),
+		vari64:    make([]byte, binary.MaxVarintLen64),
+		buffers:   make(chan *block, ncpu*bufmul),
+		nblocks:   1,
+		maxBlocks: int(maxBlocks),
+	}
+
+	switch mode {
+	case ModeFixed:
+		fw := &fixedWriter{}
+		w.writer = fw.write
+	case ModeDynamic:
+		zw := newZpaqWriter(maxSize)
+		w.writer = zw.write
+	case ModeDynamicSignatures:
+		zw := newZpaqWriter(maxSize)
+		w.writer = zw.writeFile
+	case ModeSignaturesOnly:
+		w.writer = fileSplitOnly
+	default:
+		return nil, fmt.Errorf("dedup: unknown mode")
+	}
+
+	if w.maxSize < MinBlockSize {
+		return nil, ErrSizeTooSmall
+	}
+
+	w.close = streamClose
+	w.putUint64(2)                 // Format
+	w.putUint64(uint64(maxSize))   // Maximum block size
+	w.putUint64(uint64(maxBlocks)) // Maximum backreference length
+
+	// Start one goroutine per core
+	for i := 0; i < ncpu; i++ {
+		go w.hasher()
+	}
+	// Insert the buffers we will use
+	for i := 0; i < ncpu*bufmul; i++ {
+		w.buffers <- &block{data: make([]byte, maxSize), hashDone: make(chan error, 1)}
+	}
+	go w.blockStreamWriter()
+	return w, nil
 }
 
 // putUint64 will Write uint64 value to index stream.
@@ -164,7 +242,7 @@ func (w *writer) Split() {
 	}
 	b := <-w.buffers
 	// Swap block with current
-	w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
 	b.N = w.nblocks
 
 	w.input <- b
@@ -185,7 +263,39 @@ func (w *writer) setErr(err error) {
 	w.mu.Unlock()
 }
 
-var emptyHash = [hasher.Size]byte{}
+// idxClose will flush the remainder of an index based stream
+func idxClose(w *writer) (err error) {
+	// Insert length of remaining data into index
+	w.putUint64(uint64(math.MaxUint64))
+	w.putUint64(uint64(w.maxSize - w.off))
+
+	buf := bytes.NewBuffer(w.cur[0:w.off])
+	n, err := io.Copy(w.blks, buf)
+	if err != nil {
+		return err
+	}
+	if int(n) != w.off {
+		return errors.New("idxClose: r.cur short write")
+	}
+	return nil
+}
+
+// streamClose will flush the remainder of an single stream
+func streamClose(w *writer) (err error) {
+	// Insert length of remaining data into index
+	w.putUint64(uint64(math.MaxUint64))
+	w.putUint64(uint64(w.maxSize - w.off))
+
+	buf := bytes.NewBuffer(w.cur[0:w.off])
+	n, err := io.Copy(w.idx, buf)
+	if err != nil {
+		return err
+	}
+	if int(n) != w.off {
+		return errors.New("streamClose: r.cur short write")
+	}
+	return nil
+}
 
 // Close and flush the remaining data to output.
 func (w *writer) Close() (err error) {
@@ -204,17 +314,11 @@ func (w *writer) Close() (err error) {
 	close(w.write)
 	<-w.exited
 
-	// Insert length of remaining data into index
-	w.putUint64(uint64(math.MaxUint64))
-	w.putUint64(uint64(w.size - w.off))
-
-	buf := bytes.NewBuffer(w.cur[0:w.off])
-	n, err := io.Copy(w.blks, buf)
-	if err != nil {
-		return err
-	}
-	if int(n) != w.off {
-		return errors.New("r.cur short copy")
+	if w.close != nil {
+		err := w.close(w)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -258,7 +362,46 @@ func (w *writer) blockWriter() {
 				panic("short write")
 			}
 			w.putUint64(0)
-			w.putUint64(uint64(w.size) - uint64(n))
+			w.putUint64(uint64(w.maxSize) - uint64(n))
+		} else {
+			offset := b.N - match
+			if offset <= 0 {
+				panic("negative offset, should be impossible")
+			}
+			w.putUint64(uint64(offset))
+		}
+		// Update hash to latest match
+		w.index[b.sha1Hash] = b.N
+
+		// Done, reinsert buffer
+		w.buffers <- b
+	}
+}
+
+// blockStreamWriter will write blocks and indexes to the output stream
+// and recycle the buffers.
+// TODO: There is no reason for a complete hash table, we could delete them
+// once they are to old.
+func (w *writer) blockStreamWriter() {
+	defer close(w.exited)
+	for b := range w.write {
+		_ = <-b.hashDone
+		match, ok := w.index[b.sha1Hash]
+		if (b.N - match) < w.maxBlocks {
+			ok = false
+		}
+		if !ok {
+			w.putUint64(0)
+			w.putUint64(uint64(w.maxSize) - uint64(len(b.data)))
+			buf := bytes.NewBuffer(b.data)
+			n, err := io.Copy(w.idx, buf)
+			if err != nil {
+				w.setErr(err)
+				return
+			}
+			if int(n) != len(b.data) {
+				panic("short write")
+			}
 		} else {
 			offset := b.N - match
 			if offset <= 0 {
@@ -284,7 +427,7 @@ func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 		w.off += n
 		written += n
 		// Filled the buffer? Send it off!
-		if w.off == w.size {
+		if w.off == w.maxSize {
 			b := <-w.buffers
 			// Swap block with current
 			w.cur, b.data = b.data, w.cur
@@ -363,7 +506,11 @@ func newZpaqWriter(maxSize uint) *zpaqWriter {
 }
 
 // h is a 32 bit hash that depends on the last 32 bytes that were mispredicted by the order 1 model o1[].
-// h < mazhash therefore occurs with probability 2^-16, giving an average fragment size of 64K.
+// h < maxhash therefore occurs with probability 2^-16, giving an average fragment size of 64K.
+// The variable size dependency window works because one constant is odd (correct prediction, no shift),
+// and the other is even but not a multiple of 4 (missed prediction, 1 bit shift left).
+// This is different from a normal Rabin filter, which uses a large fixed-sized dependency window
+// and two multiply operations, one at the window entry and the inverse at the window exit.
 func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 	c1 := z.c1
 	for _, c := range b {
@@ -381,7 +528,7 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 		if (r.off >= z.minFragment && z.h < z.maxHash) || r.off >= z.maxFragment {
 			b := <-r.buffers
 			// Swap block with current
-			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
+			r.cur, b.data = b.data[:r.maxSize], r.cur[:r.off]
 			b.N = r.nblocks
 
 			r.input <- b
@@ -424,7 +571,7 @@ func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
 		if w.off >= z.minFragment && (z.h < z.maxHash || split || w.off >= z.maxFragment) {
 			b := <-w.buffers
 			// Swap block with current
-			w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
 			b.N = w.nblocks
 
 			w.input <- b
@@ -455,10 +602,10 @@ func fileSplitOnly(w *writer, b []byte) (int, error) {
 		w.off++
 
 		// Filled the buffer? Send it off!
-		if split || w.off >= w.size {
+		if split || w.off >= w.maxSize {
 			b := <-w.buffers
 			// Swap block with current
-			w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
 			b.N = w.nblocks
 
 			w.input <- b
