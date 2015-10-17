@@ -57,6 +57,62 @@ func TestFixedWriter(t *testing.T) {
 	}
 }
 
+func TestFixedWriterLimit(t *testing.T) {
+	idx := bytes.Buffer{}
+	data := bytes.Buffer{}
+	input := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	const limit = 9
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+50-i)*size : (10+50-i)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ((totalinput) - data.Len()) / size
+
+	t.Log("Index size:", idx.Len())
+	t.Log("Data size:", data.Len())
+	t.Log("Removed", removed, "blocks")
+	// We should get at least 50 blocks
+	if removed > 10 {
+		t.Fatal("it did not appear to respect the limit")
+	}
+	if removed < 8 {
+		t.Fatal("removed too many blocks")
+	}
+	r, err := dedup.NewReader(&idx, &data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	useBlocks := r.MaxMem() / size
+	if useBlocks > 9 {
+		t.Fatal("Uses too much memory, expected", limit, "got", useBlocks)
+	}
+	t.Log("Maximum estimated use:", r.MaxMem(), "bytes,", useBlocks, "blocks")
+
+}
+
 func TestDynamicWriter(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}

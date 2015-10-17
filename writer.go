@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"runtime"
 	"sync"
+
+	"github.com/klauspost/dedup/sort"
 )
 
 type Writer interface {
@@ -95,9 +97,11 @@ var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least
 // The output is delivered as two streams, an index stream and a block stream.
 // The index stream will contain information about which blocks are deduplicated
 // and the block stream will contain uncompressed data blocks.
+// The maximum memory use of the decoder is maxSize*maxBlocks.
+// Set maxBlocks to 0 to disable decoder memory limit.
 // This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
-func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint, maxBlocks uint) (Writer, error) {
+func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
@@ -349,7 +353,7 @@ func (w *writer) hasher() {
 			return
 		}
 		if int(n) != len(b.data) {
-			panic("short write")
+			panic("short write monkey")
 		}
 		_ = h.Sum(b.sha1Hash[:0])
 		b.hashDone <- nil
@@ -360,6 +364,9 @@ func (w *writer) hasher() {
 // and recycle the buffers.
 func (w *writer) blockWriter() {
 	defer close(w.exited)
+
+	sortA := make([]int, w.maxBlocks+1)
+
 	for b := range w.write {
 		_ = <-b.hashDone
 		match, ok := w.index[b.sha1Hash]
@@ -385,11 +392,24 @@ func (w *writer) blockWriter() {
 		// Update hash to latest match
 		w.index[b.sha1Hash] = b.N
 
-		// Purge old entries once in a while
-		if w.maxBlocks > 0 && b.N&127 == 127 {
+		// Purge the entries with the oldest matches
+		if w.maxBlocks > 0 && len(w.index) > w.maxBlocks {
+			ar := sortA[0:len(w.index)]
+			i := 0
+			for _, v := range w.index {
+				ar[i] = v
+				i++
+			}
+			sort.Asc(ar)
+			// Cut the oldest quarter blocks
+			// since this isn't free
+			ar = ar[:w.maxBlocks/4]
 			for k, v := range w.index {
-				if (v - match) > w.maxBlocks {
-					delete(w.index, k)
+				for _, val := range ar {
+					if v == val {
+						delete(w.index, k)
+						break
+					}
 				}
 			}
 		}
