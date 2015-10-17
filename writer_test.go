@@ -93,8 +93,89 @@ func TestDynamicWriter(t *testing.T) {
 	t.Log("Dynamic Data size:", data.Len())
 	t.Log("Removed", removed, "blocks")
 	// We don't know how many, but it should remove some blocks
-	if removed < 10 {
-		t.Fatal("didn't remove at least 10 blocks")
+	if removed < 40 {
+		t.Fatal("didn't remove at least 40 blocks")
+	}
+}
+
+func TestFixedStreamWriter(t *testing.T) {
+	data := bytes.Buffer{}
+	input := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, size, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ((totalinput) - data.Len()) / size
+
+	t.Log("Data size:", data.Len())
+	t.Log("Removed", removed, "blocks")
+	// We should get at least 50 blocks, but there is a little overhead
+	if removed < 49 {
+		t.Fatal("didn't remove at least 49 blocks")
+	}
+	if removed > 60 {
+		t.Fatal("removed unreasonable high amount of blocks")
+	}
+}
+
+func TestDynamicStreamWriter(t *testing.T) {
+	data := bytes.Buffer{}
+	input := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	_, err := io.CopyN(input, rand.Reader, totalinput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeDynamic, size, 10*8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ((totalinput) - data.Len()) / size
+
+	t.Log("Dynamic Data size:", data.Len())
+	t.Log("Removed", removed, "blocks")
+	// We don't know how many, but it should remove some blocks
+	if removed < 40 {
+		t.Fatal("didn't remove at least 40 blocks")
 	}
 }
 
