@@ -155,10 +155,13 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint) (Writ
 // hash size.
 var ErrMaxBlocksTooSmall = errors.New("there must be at least 1 block backreference")
 
-// NewWriter will create a deduplicator that will split the contents written
+// NewStreamWriter will create a deduplicator that will split the contents written
 // to it into blocks and de-duplicate these.
-// The output is delivered as a single stream.
-// This function returns data that is compatible with the NewReader function.
+// The output is delivered as a single stream, and memory use will remain stable for
+// both writing and reading the stream.
+// This function returns data that is compatible with the NewStreamReader function.
+// You must specify the maximum number of blocks to keep in memory.
+// The maximum memory use of the decoder is maxSize*maxBlocks.
 // The returned writer must be closed to flush the remaining data.
 func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
@@ -222,7 +225,7 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 	return w, nil
 }
 
-// putUint64 will Write uint64 value to index stream.
+// putUint64 will Write a uint64 value to index stream.
 func (w *writer) putUint64(v uint64) error {
 	n := binary.PutUvarint(w.vari64, v)
 	n2, err := w.idx.Write(w.vari64[:n])
@@ -359,7 +362,7 @@ func (w *writer) blockWriter() {
 				return
 			}
 			if int(n) != len(b.data) {
-				panic("short write")
+				panic("short write on copy")
 			}
 			w.putUint64(0)
 			w.putUint64(uint64(w.maxSize) - uint64(n))
@@ -419,6 +422,7 @@ func (w *writer) blockStreamWriter() {
 
 type fixedWriter struct{}
 
+// Write blocks of similar size.
 func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 	written := 0
 	for len(b) > 0 {

@@ -9,8 +9,13 @@ import (
 	"math"
 )
 
+// A reader will decode a deduplicated stream and
+// return the data as it was encoded.
+// Use Close when done to release resources.
 type Reader interface {
 	io.ReadCloser
+
+	// MaxMem returns the *maximum* memory required to decode the stream.
 	MaxMem() int
 }
 
@@ -46,6 +51,9 @@ func (r *rblock) String() string {
 
 var ErrUnknownFormat = errors.New("unknown index format")
 
+// NewReader returns a reader that will decode the supplied index and data stream.
+// This is compatible content from the NewWriter function.
+// When you are done with the Reader, use Close to release resources.
 func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 	f := &fixedMemReader{
 		in:           blocks,
@@ -72,6 +80,9 @@ func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 	return f, err
 }
 
+// NewStreamReader returns a reader that will decode the supplied data stream.
+// This is compatible content from the NewStreamWriter function.
+// When you are done with the Reader, use Close to release resources.
 func NewStreamReader(in io.Reader) (Reader, error) {
 	f := &fixedMemReader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
@@ -101,6 +112,8 @@ func NewStreamReader(in io.Reader) (Reader, error) {
 	return f, nil
 }
 
+// readFormat1 will read the index of format 1
+// and prepare decoding
 func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 	size, err := binary.ReadUvarint(idx)
 	if err != nil {
@@ -150,6 +163,8 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 	return nil
 }
 
+// readFormat2 will read the header data of format 2
+// and stop at the first block.
 func (f *fixedMemReader) readFormat2(rd io.ByteReader) error {
 	size, err := binary.ReadUvarint(rd)
 	if err != nil {
@@ -171,6 +186,8 @@ func (f *fixedMemReader) readFormat2(rd io.ByteReader) error {
 	return nil
 }
 
+// Read will read from the input stream and return the
+// deduplicated data.
 func (f *fixedMemReader) Read(b []byte) (int, error) {
 	read := 0
 	for len(b) > 0 {
@@ -232,6 +249,10 @@ func (f *fixedMemReader) MaxMem() int {
 	return maxUse
 }
 
+// blockReader will read format 1 blocks and deliver them
+// to the ready channel.
+// The function will return if the stream is finished,
+// or an error occurs
 func (f *fixedMemReader) blockReader() {
 	defer close(f.readerClosed)
 	defer close(f.ready)
@@ -270,6 +291,10 @@ func (f *fixedMemReader) blockReader() {
 	return
 }
 
+// streamReader will read blocks from a single stream
+// and deliver them to the "ready" channel.
+// The function will return if an error occurs or
+// the stream is finished.
 func (f *fixedMemReader) streamReader() {
 	defer close(f.readerClosed)
 	defer close(f.ready)
@@ -343,6 +368,7 @@ func (f *fixedMemReader) streamReader() {
 	return
 }
 
+// Close the reader and shut down the running goroutines.
 func (f *fixedMemReader) Close() error {
 	select {
 	case <-f.readerClosed:
