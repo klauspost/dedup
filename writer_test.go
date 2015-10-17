@@ -33,7 +33,7 @@ func TestFixedWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewFixedWriter(&idx, &data, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDynamicWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewDynamicWriter(&idx, &data, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func BenchmarkFixedWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewFixedWriter(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -151,7 +151,7 @@ func BenchmarkFixedWriter4K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewFixedWriter(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -183,7 +183,7 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewDynamicWriter(ioutil.Discard, ioutil.Discard, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamic, size)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {

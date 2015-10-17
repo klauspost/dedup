@@ -13,8 +13,41 @@ import (
 	"sync"
 )
 
-// Size of the underlying hash in bytes for those interested
-const HashSize = hasher.Size
+type Writer interface {
+	io.WriteCloser
+
+	// Split content, so a new block begins with next write
+	Split()
+}
+
+type Mode int
+
+const (
+	// Size of the underlying hash in bytes for those interested
+	HashSize = hasher.Size
+
+	// Fixed block size
+	//
+	// This is by far the fastest mode, and checks for duplicates
+	// In fixed block sizes.
+	// It can be helpful to use the "Split" function to reset offset, which
+	// will reset duplication search at the position you are at.
+	ModeFixed Mode = iota
+
+	// Dynamic block size.
+	//
+	// This mode will create a deduplicator that will split the contents written
+	// to it into dynamically sized blocks.
+	// The size given indicates the maximum block size. Average size is usually maxSize/8.
+	// Minimum block size is maxSize/128.
+	ModeDynamic
+
+	// Dynamic block size, including split on file signatures
+	ModeDynamicSignatures
+
+	// Dynamic block size only split on file signatures
+	ModeSignaturesOnly
+)
 
 type writer struct {
 	blks    io.Writer                 // Block data writer
@@ -32,6 +65,7 @@ type writer struct {
 	mu      sync.Mutex                // Mutex for error state
 	nblocks int                       // Current block number. First block is 1.
 	writer  func(*writer, []byte) (int, error)
+	flush   func(*writer) error
 }
 
 // block contains information about a single block
@@ -44,45 +78,59 @@ type block struct {
 
 // ErrSizeTooSmall is returned if the requested block size is smaller than
 // hash size.
-var ErrSizeTooSmall = errors.New("block size too small")
+var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least 512 bytes")
 
-// NewFixed will create a deduplicator that will split the contents written
-// to it into equally sized blocks and de-duplicate these.
+// NewWriter will create a deduplicator that will split the contents written
+// to it into blocks and de-duplicate these.
 // The output is delivered as two streams, an index stream and a block stream.
 // The index stream will contain information about which blocks are deduplicated
 // and the block stream will contain uncompressed data blocks.
+// This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
-func NewFixedWriter(index io.Writer, blocks io.Writer, size uint) (io.WriteCloser, error) {
+func NewWriter(index io.Writer, blocks io.Writer, mode Mode, max uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
-	var bufmul = 256 << 10 / int(size)
+	var bufmul = 256 << 10 / int(max)
 	if bufmul < 2 {
 		bufmul = 2
 	}
 	r := &writer{
 		blks:    blocks,
 		idx:     index,
-		size:    int(size),
+		size:    int(max),
 		index:   make(map[[hasher.Size]byte]int),
 		input:   make(chan *block, ncpu*bufmul),
 		write:   make(chan *block, ncpu*bufmul),
 		exited:  make(chan struct{}, 0),
-		cur:     make([]byte, size),
+		cur:     make([]byte, max),
 		vari64:  make([]byte, binary.MaxVarintLen64),
 		buffers: make(chan *block, ncpu*bufmul),
 		nblocks: 1,
 	}
 
-	w := &fixedWriter{}
-	r.writer = w.write
+	switch mode {
+	case ModeFixed:
+		w := &fixedWriter{}
+		r.writer = w.write
+	case ModeDynamic:
+		w := newZpaqWriter(max)
+		r.writer = w.write
+	case ModeDynamicSignatures:
+		w := newZpaqWriter(max)
+		r.writer = w.writeFile
+	case ModeSignaturesOnly:
+		r.writer = fileSplitOnly
+	default:
+		return nil, fmt.Errorf("dedup: unknown mode")
+	}
 
-	if r.size <= hasher.Size {
+	if r.size < 512 {
 		return nil, ErrSizeTooSmall
 	}
 
-	r.putUint64(1) // Format
-	r.putUint64(uint64(size))
+	r.putUint64(1)           // Format
+	r.putUint64(uint64(max)) // Maximum block size
 
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {
@@ -90,68 +138,16 @@ func NewFixedWriter(index io.Writer, blocks io.Writer, size uint) (io.WriteClose
 	}
 	// Insert the buffers we will use
 	for i := 0; i < ncpu*bufmul; i++ {
-		r.buffers <- &block{data: make([]byte, size), hashDone: make(chan error, 1)}
-	}
-	go r.blockWriter()
-	return r, nil
-}
-
-// NewDynamicWriter will create a deduplicator that will split the contents written
-// to it into dynamically sized blocks.
-// The size given indicates the maximum block size. Average size is usually maxSize/8.
-// Minimum block size is maxSize/128.
-// The output is delivered as two streams, an index stream and a block stream.
-// The index stream will contain information about which blocks are deduplicated
-// and the block stream will contain uncompressed data blocks.
-// The returned writer must be closed to flush the remaining data.
-func NewDynamicWriter(index io.Writer, blocks io.Writer, maxSize uint) (io.WriteCloser, error) {
-	ncpu := runtime.GOMAXPROCS(0)
-	// For small block sizes we need to keep a pretty big buffer to keep input fed.
-	// Constant below appears to be sweet spot measured with 4K blocks.
-	var bufmul = 256 << 10 / int(maxSize) / 8
-	if bufmul < 2 {
-		bufmul = 2
-	}
-	r := &writer{
-		blks:    blocks,
-		idx:     index,
-		size:    int(maxSize),
-		index:   make(map[[hasher.Size]byte]int),
-		input:   make(chan *block, ncpu*bufmul),
-		write:   make(chan *block, ncpu*bufmul),
-		exited:  make(chan struct{}, 0),
-		cur:     make([]byte, maxSize),
-		vari64:  make([]byte, binary.MaxVarintLen64),
-		buffers: make(chan *block, ncpu*bufmul),
-		nblocks: 1,
-	}
-
-	w := newZpaqWriter(maxSize)
-	r.writer = w.write
-
-	if r.size <= hasher.Size {
-		return nil, ErrSizeTooSmall
-	}
-
-	r.putUint64(1) // Format
-	r.putUint64(uint64(maxSize))
-
-	// Start one goroutine per core
-	for i := 0; i < ncpu; i++ {
-		go r.hasher()
-	}
-	// Insert the buffers we will use
-	for i := 0; i < ncpu*bufmul; i++ {
-		r.buffers <- &block{data: make([]byte, maxSize), hashDone: make(chan error, 1)}
+		r.buffers <- &block{data: make([]byte, max), hashDone: make(chan error, 1)}
 	}
 	go r.blockWriter()
 	return r, nil
 }
 
 // putUint64 will Write uint64 value to index stream.
-func (r *writer) putUint64(v uint64) error {
-	n := binary.PutUvarint(r.vari64, v)
-	n2, err := r.idx.Write(r.vari64[:n])
+func (w *writer) putUint64(v uint64) error {
+	n := binary.PutUvarint(w.vari64, v)
+	n2, err := w.idx.Write(w.vari64[:n])
 	if err != nil {
 		return err
 	}
@@ -162,81 +158,62 @@ func (r *writer) putUint64(v uint64) error {
 }
 
 // Split content, so a new block begins with next write
-func (r *writer) Split() {
-	if r.off == 0 {
+func (w *writer) Split() {
+	if w.off == 0 {
 		return
 	}
-	b := <-r.buffers
+	b := <-w.buffers
 	// Swap block with current
-	r.cur, b.data = b.data[:r.size], r.cur[:r.off]
-	b.N = r.nblocks
+	w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+	b.N = w.nblocks
 
-	r.input <- b
-	r.write <- b
-	r.nblocks++
-	r.off = 0
+	w.input <- b
+	w.write <- b
+	w.nblocks++
+	w.off = 0
 }
 
 // Write contents to the deduplicator.
-func (r *writer) Write(b []byte) (n int, err error) {
-	return r.writer(r, b)
-}
-
-type fixedWriter struct{}
-
-func (f *fixedWriter) write(r *writer, b []byte) (n int, err error) {
-	written := 0
-	for len(b) > 0 {
-		n := copy(r.cur[r.off:], b)
-		b = b[n:]
-		r.off += n
-		written += n
-		// Filled the buffer? Send it off!
-		if r.off == r.size {
-			b := <-r.buffers
-			// Swap block with current
-			r.cur, b.data = b.data, r.cur
-			b.N = r.nblocks
-
-			r.input <- b
-			r.write <- b
-			r.nblocks++
-			r.off = 0
-		}
-	}
-	return written, nil
+func (w *writer) Write(b []byte) (n int, err error) {
+	return w.writer(w, b)
 }
 
 // setErr will set the error state of the writer.
-func (r *writer) setErr(err error) {
-	r.mu.Lock()
-	r.err = err
-	r.mu.Unlock()
+func (w *writer) setErr(err error) {
+	w.mu.Lock()
+	w.err = err
+	w.mu.Unlock()
 }
 
 var emptyHash = [hasher.Size]byte{}
 
 // Close and flush the remaining data to output.
-func (r *writer) Close() (err error) {
+func (w *writer) Close() (err error) {
 	select {
-	case <-r.exited:
+	case <-w.exited:
 		return nil
 	default:
 	}
-	close(r.input)
-	close(r.write)
-	<-r.exited
+	if w.flush != nil {
+		err := w.flush(w)
+		if err != nil {
+			return err
+		}
+	}
+	close(w.input)
+	close(w.write)
+	<-w.exited
 
 	// Insert length of remaining data into index
-	r.putUint64(uint64(math.MaxUint64))
-	r.putUint64(uint64(r.size - r.off))
+	w.putUint64(uint64(math.MaxUint64))
+	w.putUint64(uint64(w.size - w.off))
 
-	buf := bytes.NewBuffer(r.cur[0:r.off])
-	n, err := io.Copy(r.blks, buf)
+	buf := bytes.NewBuffer(w.cur[0:w.off])
+	n, err := io.Copy(w.blks, buf)
 	if err != nil {
 		return err
 	}
-	if int(n) != r.off {
+	if int(n) != w.off {
 		return errors.New("r.cur short copy")
 	}
 
@@ -245,14 +222,14 @@ func (r *writer) Close() (err error) {
 
 // hasher will hash incoming blocks
 // and signal the writer when done.
-func (r *writer) hasher() {
+func (w *writer) hasher() {
 	h := hasher.New()
-	for b := range r.input {
+	for b := range w.input {
 		buf := bytes.NewBuffer(b.data)
 		h.Reset()
 		n, err := io.Copy(h, buf)
 		if err != nil {
-			r.setErr(err)
+			w.setErr(err)
 			return
 		}
 		if int(n) != len(b.data) {
@@ -265,36 +242,61 @@ func (r *writer) hasher() {
 
 // blockWriter will write hashed blocks to the output
 // and recycle the buffers.
-func (r *writer) blockWriter() {
-	defer close(r.exited)
-	for b := range r.write {
+func (w *writer) blockWriter() {
+	defer close(w.exited)
+	for b := range w.write {
 		_ = <-b.hashDone
-		match, ok := r.index[b.sha1Hash]
+		match, ok := w.index[b.sha1Hash]
 		if !ok {
 			buf := bytes.NewBuffer(b.data)
-			n, err := io.Copy(r.blks, buf)
+			n, err := io.Copy(w.blks, buf)
 			if err != nil {
-				r.setErr(err)
+				w.setErr(err)
 				return
 			}
 			if int(n) != len(b.data) {
 				panic("short write")
 			}
-			r.putUint64(0)
-			r.putUint64(uint64(r.size) - uint64(n))
+			w.putUint64(0)
+			w.putUint64(uint64(w.size) - uint64(n))
 		} else {
 			offset := b.N - match
 			if offset <= 0 {
 				panic("negative offset, should be impossible")
 			}
-			r.putUint64(uint64(offset))
+			w.putUint64(uint64(offset))
 		}
 		// Update hash to latest match
-		r.index[b.sha1Hash] = b.N
+		w.index[b.sha1Hash] = b.N
 
 		// Done, reinsert buffer
-		r.buffers <- b
+		w.buffers <- b
 	}
+}
+
+type fixedWriter struct{}
+
+func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
+	written := 0
+	for len(b) > 0 {
+		n := copy(w.cur[w.off:], b)
+		b = b[n:]
+		w.off += n
+		written += n
+		// Filled the buffer? Send it off!
+		if w.off == w.size {
+			b := <-w.buffers
+			// Swap block with current
+			w.cur, b.data = b.data, w.cur
+			b.N = w.nblocks
+
+			w.input <- b
+			w.write <- b
+			w.nblocks++
+			w.off = 0
+		}
+	}
+	return written, nil
 }
 
 // Returns an approximate Birthday probability calculation
@@ -339,22 +341,29 @@ type zpaqWriter struct {
 	c1          byte   // last byte
 	maxFragment int
 	minFragment int
-	minHash     uint32
+	maxHash     uint32
 	o1          [256]byte // order 1 context -> predicted byte
 }
 
 // Split blocks. Typically block size will be maxSize / 8
 // Minimum block size is maxSize/128.
+//
+// The break point is content dependent.
+// Any insertions, deletions, or edits that occur before the start of the 32+ byte dependency window
+// don't affect the break point.
+// This makes it likely for two files to still have identical fragments far away from any edits.
 func newZpaqWriter(maxSize uint) *zpaqWriter {
 	fragment := math.Log2(float64(maxSize) / (64 * 8))
 	mh := math.Exp2(22 - fragment)
 	return &zpaqWriter{
 		maxFragment: int(maxSize),
 		minFragment: int(maxSize / 128),
-		minHash:     uint32(mh),
+		maxHash:     uint32(mh),
 	}
 }
 
+// h is a 32 bit hash that depends on the last 32 bytes that were mispredicted by the order 1 model o1[].
+// h < mazhash therefore occurs with probability 2^-16, giving an average fragment size of 64K.
 func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 	c1 := z.c1
 	for _, c := range b {
@@ -368,8 +377,8 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 		r.cur[r.off] = c
 		r.off++
 
-		// Filled the buffer? Send it off!
-		if (r.off >= z.minFragment && z.h < z.minHash) || r.off >= z.maxFragment {
+		// At a break point? Send it off!
+		if (r.off >= z.minFragment && z.h < z.maxHash) || r.off >= z.maxFragment {
 			b := <-r.buffers
 			// Swap block with current
 			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
@@ -388,7 +397,7 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 }
 
 // Split on zpaq hash, file signatures and maximum block size.
-func (z *zpaqWriter) writeFile(r *writer, b []byte) (int, error) {
+func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
 	c1 := z.c1
 
 	for i, c := range b {
@@ -408,20 +417,20 @@ func (z *zpaqWriter) writeFile(r *writer, b []byte) (int, error) {
 		}
 		z.o1[c1] = c
 		c1 = c
-		r.cur[r.off] = c
-		r.off++
+		w.cur[w.off] = c
+		w.off++
 
 		// Filled the buffer? Send it off!
-		if r.off >= z.minFragment && (z.h < z.minHash || split || r.off >= z.maxFragment) {
-			b := <-r.buffers
+		if w.off >= z.minFragment && (z.h < z.maxHash || split || w.off >= z.maxFragment) {
+			b := <-w.buffers
 			// Swap block with current
-			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
-			b.N = r.nblocks
+			w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+			b.N = w.nblocks
 
-			r.input <- b
-			r.write <- b
-			r.nblocks++
-			r.off = 0
+			w.input <- b
+			w.write <- b
+			w.nblocks++
+			w.off = 0
 			z.h = 0
 			c1 = 0
 		}
@@ -431,7 +440,7 @@ func (z *zpaqWriter) writeFile(r *writer, b []byte) (int, error) {
 }
 
 // Split on maximum size and file signatures only.
-func fileSplitOnly(r *writer, b []byte) (int, error) {
+func fileSplitOnly(w *writer, b []byte) (int, error) {
 	for i, c := range b {
 		split := false
 		v := sigmap[c]
@@ -442,26 +451,27 @@ func fileSplitOnly(r *writer, b []byte) (int, error) {
 				}
 			}
 		}
-		r.cur[r.off] = c
-		r.off++
+		w.cur[w.off] = c
+		w.off++
 
 		// Filled the buffer? Send it off!
-		if split || r.off >= r.size {
-			b := <-r.buffers
+		if split || w.off >= w.size {
+			b := <-w.buffers
 			// Swap block with current
-			r.cur, b.data = b.data[:r.size], r.cur[:r.off]
-			b.N = r.nblocks
+			w.cur, b.data = b.data[:w.size], w.cur[:w.off]
+			b.N = w.nblocks
 
-			r.input <- b
-			r.write <- b
-			r.nblocks++
-			r.off = 0
+			w.input <- b
+			w.write <- b
+			w.nblocks++
+			w.off = 0
 		}
 	}
 	return len(b), nil
 }
 
-//	4 times faster than map[byte][][]byte
+// 4 times faster than map[byte][][]byte
+// 2 times faster than generated code (switch byte 0, if)
 var sigmap [256][][]byte
 
 func init() {
