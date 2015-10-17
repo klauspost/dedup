@@ -32,7 +32,7 @@ func TestReader(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestDynamicRoundtrip(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func BenchmarkReader64K(t *testing.B) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, size)
+	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, size, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func BenchmarkReader4K(t *testing.B) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, size)
+	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, size, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

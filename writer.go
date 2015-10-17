@@ -18,6 +18,10 @@ type Writer interface {
 
 	// Split content, so a new block begins with next write
 	Split()
+
+	// MemUse returns an approximate maximum memory use in bytes for
+	// encoder (Writer) and decoder (Reader) for the given number of bytes.
+	MemUse(bytes int) (encoder, decoder int64)
 }
 
 // Size of the underlying hash in bytes for those interested
@@ -93,7 +97,7 @@ var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least
 // and the block stream will contain uncompressed data blocks.
 // This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
-func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint) (Writer, error) {
+func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint, maxBlocks uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
@@ -101,18 +105,23 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize uint) (Writ
 	if bufmul < 2 {
 		bufmul = 2
 	}
+	if maxBlocks < 0 {
+		maxBlocks = 0
+	}
+
 	w := &writer{
-		blks:    blocks,
-		idx:     index,
-		maxSize: int(maxSize),
-		index:   make(map[[hasher.Size]byte]int),
-		input:   make(chan *block, ncpu*bufmul),
-		write:   make(chan *block, ncpu*bufmul),
-		exited:  make(chan struct{}, 0),
-		cur:     make([]byte, maxSize),
-		vari64:  make([]byte, binary.MaxVarintLen64),
-		buffers: make(chan *block, ncpu*bufmul),
-		nblocks: 1,
+		blks:      blocks,
+		idx:       index,
+		maxSize:   int(maxSize),
+		index:     make(map[[hasher.Size]byte]int),
+		input:     make(chan *block, ncpu*bufmul),
+		write:     make(chan *block, ncpu*bufmul),
+		exited:    make(chan struct{}, 0),
+		cur:       make([]byte, maxSize),
+		vari64:    make([]byte, binary.MaxVarintLen64),
+		buffers:   make(chan *block, ncpu*bufmul),
+		nblocks:   1,
+		maxBlocks: int(maxBlocks),
 	}
 
 	switch mode {
@@ -376,6 +385,15 @@ func (w *writer) blockWriter() {
 		// Update hash to latest match
 		w.index[b.sha1Hash] = b.N
 
+		// Purge old entries once in a while
+		if w.maxBlocks > 0 && b.N&127 == 127 {
+			for k, v := range w.index {
+				if (v - match) > w.maxBlocks {
+					delete(w.index, k)
+				}
+			}
+		}
+
 		// Done, reinsert buffer
 		w.buffers <- b
 	}
@@ -388,7 +406,7 @@ func (w *writer) blockStreamWriter() {
 	for b := range w.write {
 		_ = <-b.hashDone
 		match, ok := w.index[b.sha1Hash]
-		if (b.N - match) > w.maxBlocks {
+		if w.maxBlocks > 0 && (b.N-match) > w.maxBlocks {
 			ok = false
 		}
 		if !ok {
@@ -414,7 +432,7 @@ func (w *writer) blockStreamWriter() {
 		w.index[b.sha1Hash] = b.N
 
 		// Purge old entries once in a while
-		if b.N&127 == 127 {
+		if w.maxBlocks > 0 && b.N&127 == 127 {
 			for k, v := range w.index {
 				if (v - match) > w.maxBlocks {
 					delete(w.index, k)
@@ -476,16 +494,30 @@ func BirthDayProblem(blocks int) string {
 	return "Collision probability is" + invs
 }
 
-// Returns an approximate memory use in bytes for compression
-// for the given number of blocks with NewWriter.
-func FixedMemUse(blocks int) int64 {
+// MemUse returns an approximate maximum memory use in bytes for
+// encoder (Writer) and decoder (Reader) for the given number of bytes.
+func (w *writer) MemUse(bytes int) (encoder, decoder int64) {
+	blocks := (bytes + w.maxSize - 1) / w.maxSize
+	if w.maxBlocks > 0 {
+		if w.maxBlocks < blocks {
+			blocks = w.maxBlocks
+		}
+	}
+	// Data length
+	data := big.NewInt(int64(blocks))
+	data = data.Mul(data, big.NewInt(int64(w.maxSize)))
+	d := data.Int64()
+	if data.BitLen() > 63 {
+		d = math.MaxInt64
+	}
+	// Index length
 	bl := big.NewInt(int64(blocks))
 	perBlock := big.NewInt(int64(HashSize + 8 /*int64*/ + 24 /* map entry*/))
 	total := bl.Mul(bl, perBlock)
 	if total.BitLen() > 63 {
-		return math.MaxInt64
+		return math.MaxInt64, d
 	}
-	return total.Int64()
+	return total.Int64(), d
 }
 
 // Split blocks like ZPAQ: (public domain)

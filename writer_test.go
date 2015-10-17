@@ -33,7 +33,7 @@ func TestFixedWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDynamicWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size, 10*8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func BenchmarkFixedWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size, 0)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -232,7 +232,7 @@ func BenchmarkFixedWriter4K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size, 0)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -264,7 +264,7 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamic, size)
+		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamic, size, 0)
 		io.Copy(w, input)
 		err = w.Close()
 		if err != nil {
@@ -308,17 +308,26 @@ func TestBirthday(t *testing.T) {
 	t.Log("Hash size is", dedup.HashSize*8, "bits")
 	t.Log("1GiB, 1KiB blocks:")
 	t.Log(dedup.BirthDayProblem((1 << 30) / (1 << 10)))
-	t.Log("It will use", dedup.FixedMemUse((1<<30)/(1<<10))>>20, "MiB memory")
+	w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, 1<<10, 0)
+	e, _ := w.MemUse(1 << 30)
+	t.Logf("It will use %d MiB for encoder", e>>20)
 	t.Log("1TiB, 4KiB blocks:")
 	t.Log(dedup.BirthDayProblem((1 << 40) / (4 << 10)))
-	t.Log("It will use", dedup.FixedMemUse((1<<40)/(4<<10))>>20, "MiB memory")
+	w, _ = dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, 4<<10, 0)
+	e, _ = w.MemUse(1 << 40)
+	t.Logf("It will use %d MiB for encoder", e>>20)
 	t.Log("1PiB, 4KiB blocks:")
 	t.Log(dedup.BirthDayProblem((1 << 50) / (4 << 10)))
-	t.Log("It will use", dedup.FixedMemUse((1<<50)/(4<<10))>>20, "MiB memory")
+	e, _ = w.MemUse(1 << 50)
+	t.Logf("It will use %d MiB for encoder", e>>20)
 	t.Log("1EiB, 64KiB blocks:")
 	t.Log(dedup.BirthDayProblem((1 << 60) / (64 << 10)))
-	t.Log("It will use", dedup.FixedMemUse((1<<60)/(64<<10))>>20, "MiB memory")
+	w, _ = dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, 64<<10, 0)
+	e, _ = w.MemUse(1 << 60)
+	t.Logf("It will use %d MiB for encoder,", e>>20)
 	t.Log("1EiB, 1KiB blocks:")
 	t.Log(dedup.BirthDayProblem((1 << 60) / (1 << 10)))
-	t.Log("It will use", dedup.FixedMemUse((1<<60)/(1<<10))>>20, "MiB memory")
+	w, _ = dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, 1<<10, 0)
+	e, _ = w.MemUse(1 << 60)
+	t.Logf("It will use %d MiB for encoder,", e>>20)
 }
