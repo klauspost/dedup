@@ -387,7 +387,7 @@ func (w *writer) blockStreamWriter() {
 	for b := range w.write {
 		_ = <-b.hashDone
 		match, ok := w.index[b.sha1Hash]
-		if (b.N - match) < w.maxBlocks {
+		if (b.N - match) > w.maxBlocks {
 			ok = false
 		}
 		if !ok {
