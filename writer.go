@@ -18,7 +18,7 @@ import (
 type Writer interface {
 	io.WriteCloser
 
-	// Split content, so a new block begins with next write
+	// Split content, so a new block begins with next write.
 	Split()
 
 	// MemUse returns an approximate maximum memory use in bytes for
@@ -26,10 +26,10 @@ type Writer interface {
 	MemUse(bytes int) (encoder, decoder int64)
 }
 
-// Size of the underlying hash in bytes for those interested
+// Size of the underlying hash in bytes for those interested.
 const HashSize = hasher.Size
 
-// The smallest "maximum" block size allowed
+// The smallest "maximum" block size allowed.
 const MinBlockSize = 512
 
 // Deduplication mode used to determine how input is split.
@@ -94,11 +94,15 @@ var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least
 
 // NewWriter will create a deduplicator that will split the contents written
 // to it into blocks and de-duplicate these.
+//
 // The output is delivered as two streams, an index stream and a block stream.
+//
 // The index stream will contain information about which blocks are deduplicated
 // and the block stream will contain uncompressed data blocks.
+//
 // The maximum memory use of the decoder is maxSize*maxBlocks.
 // Set maxBlocks to 0 to disable decoder memory limit.
+//
 // This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
 func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
@@ -170,11 +174,15 @@ var ErrMaxBlocksTooSmall = errors.New("there must be at least 1 block backrefere
 
 // NewStreamWriter will create a deduplicator that will split the contents written
 // to it into blocks and de-duplicate these.
+//
 // The output is delivered as a single stream, and memory use will remain stable for
 // both writing and reading the stream.
+//
 // This function returns data that is compatible with the NewStreamReader function.
+//
 // You must specify the maximum number of blocks to keep in memory.
 // The maximum memory use of the decoder is maxSize*maxBlocks.
+//
 // The returned writer must be closed to flush the remaining data.
 func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
@@ -491,9 +499,9 @@ func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 }
 
 // Returns an approximate Birthday probability calculation
-// It uses the simplified calculation:
+// based on the number of blocks given and the hash size.
 //
-// p = k(k-1) / (2N)
+// It uses the simplified calculation:  p = k(k-1) / (2N)
 //
 // From http://preshing.com/20110504/hash-collision-probabilities/
 func BirthDayProblem(blocks int) string {

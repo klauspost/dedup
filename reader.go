@@ -52,7 +52,9 @@ func (r *rblock) String() string {
 var ErrUnknownFormat = errors.New("unknown index format")
 
 // NewReader returns a reader that will decode the supplied index and data stream.
+//
 // This is compatible content from the NewWriter function.
+//
 // When you are done with the Reader, use Close to release resources.
 func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 	f := &fixedMemReader{
@@ -81,9 +83,80 @@ func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 }
 
 // NewStreamReader returns a reader that will decode the supplied data stream.
+//
 // This is compatible content from the NewStreamWriter function.
+//
 // When you are done with the Reader, use Close to release resources.
 func NewStreamReader(in io.Reader) (Reader, error) {
+	f := &fixedMemReader{
+		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
+		closeReader:  make(chan struct{}, 0),
+		readerClosed: make(chan struct{}, 0),
+		curBlock:     0,
+	}
+	br := bufio.NewReader(in)
+	format, err := binary.ReadUvarint(br)
+	if err != nil {
+		return nil, err
+	}
+
+	switch format {
+	case 2:
+		err = f.readFormat2(br)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, ErrUnknownFormat
+	}
+
+	f.stream = br
+	go f.streamReader()
+
+	return f, nil
+}
+
+// NewSeekRead returns a reader that will decode the supplied index and data stream.
+//
+// This is compatible content from the NewWriter function.
+//
+// No blocks will be kept in memory, but the block data input must be seekable.
+//
+// When you are done with the Reader, use Close to release resources.
+func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (Reader, error) {
+	f := &fixedMemReader{
+		in:           blocks,
+		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
+		closeReader:  make(chan struct{}, 0),
+		readerClosed: make(chan struct{}, 0),
+		curBlock:     0,
+	}
+	idx := bufio.NewReader(index)
+	format, err := binary.ReadUvarint(idx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch format {
+	case 1:
+		err = f.readFormat1(idx)
+	default:
+		err = ErrUnknownFormat
+	}
+	go f.blockReader()
+
+	//fmt.Println(f.blocks)
+	return f, err
+}
+
+// NewStreamReader returns a reader that will decode the supplied data stream.
+//
+// This is compatible content from the NewStreamWriter function.
+//
+// No blocks will be kept in memory, but the block data input must be seekable.
+//
+// When you are done with the Reader, use Close to release resources.
+func NewSeekStreamReader(in io.ReadSeeker) (Reader, error) {
 	f := &fixedMemReader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
