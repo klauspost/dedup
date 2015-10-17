@@ -110,7 +110,7 @@ func TestFixedWriterLimit(t *testing.T) {
 		t.Fatal("Uses too much memory, expected", limit, "got", useBlocks)
 	}
 	t.Log("Maximum estimated use:", r.MaxMem(), "bytes,", useBlocks, "blocks")
-
+	r.Close()
 }
 
 func TestDynamicWriter(t *testing.T) {
