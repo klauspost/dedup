@@ -233,7 +233,6 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 			f.blocks = append(f.blocks, org)
 		}
 	}
-	return nil
 }
 
 // readFormat2 will read the header data of format 2
@@ -361,7 +360,6 @@ func (f *fixedMemReader) blockReader() {
 			return
 		}
 	}
-	return
 }
 
 // streamReader will read blocks from a single stream
@@ -438,7 +436,6 @@ func (f *fixedMemReader) streamReader() {
 		}
 		i++
 	}
-	return
 }
 
 // Close the reader and shut down the running goroutines.
