@@ -411,13 +411,10 @@ func (w *writer) blockWriter() {
 			sort.Asc(ar)
 			// Cut the oldest quarter blocks
 			// since this isn't free
-			ar = ar[:w.maxBlocks/4]
+			cutoff := ar[w.maxBlocks/4]
 			for k, v := range w.index {
-				for _, val := range ar {
-					if v == val {
-						delete(w.index, k)
-						break
-					}
+				if v < cutoff {
+					delete(w.index, k)
 				}
 			}
 		}
