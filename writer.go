@@ -48,11 +48,13 @@ const (
 	//
 	// This mode will create a deduplicator that will split the contents written
 	// to it into dynamically sized blocks.
-	// The size given indicates the maximum block size. Average size is usually maxSize/8.
-	// Minimum block size is maxSize/128.
+	// The size given indicates the maximum block size. Average size is usually maxSize/4.
+	// Minimum block size is maxSize/64.
 	ModeDynamic
 
-	// Dynamic block size, including split on file signatures
+	// Dynamic block size, including split on file signatures.
+	// There are a number of typical file signartures builtin,
+	// or you can use AddSignature to add your own.
 	ModeDynamicSignatures
 
 	// Dynamic block size only split on file signatures
@@ -501,7 +503,7 @@ func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 // It uses the simplified calculation:  p = k(k-1) / (2N)
 //
 // From http://preshing.com/20110504/hash-collision-probabilities/
-func BirthDayProblem(blocks int) string {
+func BirthdayProblem(blocks int) string {
 	k := big.NewInt(int64(blocks))
 	km1 := big.NewInt(int64(blocks - 1))
 	ksq := k.Mul(k, km1)
@@ -555,19 +557,19 @@ type zpaqWriter struct {
 	o1          [256]byte // order 1 context -> predicted byte
 }
 
-// Split blocks. Typically block size will be maxSize / 8
-// Minimum block size is maxSize/128.
+// Split blocks. Typically block size will be maxSize / 4
+// Minimum block size is maxSize/64.
 //
 // The break point is content dependent.
 // Any insertions, deletions, or edits that occur before the start of the 32+ byte dependency window
 // don't affect the break point.
 // This makes it likely for two files to still have identical fragments far away from any edits.
 func newZpaqWriter(maxSize uint) *zpaqWriter {
-	fragment := math.Log2(float64(maxSize) / (64 * 8))
+	fragment := math.Log2(float64(maxSize) / (64 * 4))
 	mh := math.Exp2(22 - fragment)
 	return &zpaqWriter{
 		maxFragment: int(maxSize),
-		minFragment: int(maxSize / 128),
+		minFragment: int(maxSize / 64),
 		maxHash:     uint32(mh),
 	}
 }
@@ -619,8 +621,12 @@ func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
 		v := sigmap[c]
 		if len(v) > 0 && i < len(b)-6 {
 			for _, s := range v {
-				if bytes.Compare(s, b[i+1:i+6]) == 0 {
-					split = true
+				split = true
+				for j, expect := range s {
+					if b[j+1] != expect {
+						split = false
+						break
+					}
 				}
 			}
 		}
@@ -660,8 +666,12 @@ func fileSplitOnly(w *writer, b []byte) (int, error) {
 		v := sigmap[c]
 		if len(v) > 0 && i < len(b)-6 {
 			for _, s := range v {
-				if bytes.Compare(s, b[i+1:i+6]) == 0 {
-					split = true
+				split = true
+				for j, expect := range s {
+					if b[j+1] != expect {
+						split = false
+						break
+					}
 				}
 			}
 		}
@@ -691,13 +701,33 @@ var sigmap [256][][]byte
 func init() {
 	for _, sig := range signatures {
 		l := sig[0]
-		slice := sig[1 : 1+l]
-		x := sigmap[slice[0]]
-		dst := make([]byte, l-1)
-		copy(dst, slice[1:])
-		x = append(x, dst)
-		sigmap[slice[0]] = x
+		err := AddSignature(sig[1 : 1+l])
+		if err != nil {
+			panic(err)
+		}
 	}
+}
+
+// ErrSignatureTooShort is returned if AddSignature is called
+// with a signature shorter than 3 bytes
+var ErrSignatureTooShort = errors.New("signature should be at least 2 bytes")
+
+// AddSignature will add a signature that will cause a block
+// split. The signature must be more than 1 byte (at least 3 is recommended),
+// and only up to 7 bytes are compared.
+func AddSignature(b []byte) error {
+	if len(b) <= 1 {
+		return ErrSignatureTooShort
+	}
+	if len(b) > 7 {
+		b = b[:7]
+	}
+	x := sigmap[b[0]]
+	dst := make([]byte, len(b)-1)
+	copy(dst, b[1:])
+	x = append(x, dst)
+	sigmap[b[0]] = x
+	return nil
 }
 
 // File start signatures
