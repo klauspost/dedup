@@ -20,10 +20,8 @@ type Reader interface {
 }
 
 //
-type fixedMemReader struct {
+type reader struct {
 	blocks       []*rblock
-	in           io.Reader
-	stream       *bufio.Reader
 	size         int
 	maxLength    uint64 // Maxmimum backreference count
 	curBlock     int
@@ -39,6 +37,7 @@ type rblock struct {
 	readData int
 	first    int   // Index of first occurrence
 	last     int   // Index of last occurrence
+	offset   int64 // Expected offset in data file (format 1)
 	err      error // Read error?
 }
 
@@ -46,7 +45,7 @@ func (r *rblock) String() string {
 	if r == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("{Read:%d; [%d:%d]}", r.readData, r.first, r.last)
+	return fmt.Sprintf("{Read:%d; [%d:%d], offset:%d}", r.readData, r.first, r.last, r.offset)
 }
 
 var ErrUnknownFormat = errors.New("unknown index format")
@@ -57,8 +56,7 @@ var ErrUnknownFormat = errors.New("unknown index format")
 //
 // When you are done with the Reader, use Close to release resources.
 func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
-	f := &fixedMemReader{
-		in:           blocks,
+	f := &reader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
@@ -76,7 +74,7 @@ func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 	default:
 		err = ErrUnknownFormat
 	}
-	go f.blockReader()
+	go f.blockReader(blocks)
 
 	//fmt.Println(f.blocks)
 	return f, err
@@ -88,7 +86,7 @@ func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 //
 // When you are done with the Reader, use Close to release resources.
 func NewStreamReader(in io.Reader) (Reader, error) {
-	f := &fixedMemReader{
+	f := &reader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
@@ -110,8 +108,7 @@ func NewStreamReader(in io.Reader) (Reader, error) {
 		return nil, ErrUnknownFormat
 	}
 
-	f.stream = br
-	go f.streamReader()
+	go f.streamReader(br)
 
 	return f, nil
 }
@@ -124,12 +121,12 @@ func NewStreamReader(in io.Reader) (Reader, error) {
 //
 // When you are done with the Reader, use Close to release resources.
 func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (Reader, error) {
-	f := &fixedMemReader{
-		in:           blocks,
+	f := &reader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
 		curBlock:     0,
+		maxLength:    8, // We have 8 blocks readahead.
 	}
 	idx := bufio.NewReader(index)
 	format, err := binary.ReadUvarint(idx)
@@ -143,12 +140,13 @@ func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (Reader, error) {
 	default:
 		err = ErrUnknownFormat
 	}
-	go f.blockReader()
+	go f.seekReader(blocks)
 
 	//fmt.Println(f.blocks)
 	return f, err
 }
 
+/*
 // NewStreamReader returns a reader that will decode the supplied data stream.
 //
 // This is compatible content from the NewStreamWriter function.
@@ -184,10 +182,11 @@ func NewSeekStreamReader(in io.ReadSeeker) (Reader, error) {
 
 	return f, nil
 }
+*/
 
 // readFormat1 will read the index of format 1
 // and prepare decoding
-func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
+func (f *reader) readFormat1(idx io.ByteReader) error {
 	size, err := binary.ReadUvarint(idx)
 	if err != nil {
 		return err
@@ -197,6 +196,7 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 	// Insert empty block 0
 	f.blocks = append(f.blocks, nil)
 	i := 0
+	var foffset int64
 	// Read blocks
 	for {
 		i++
@@ -211,15 +211,16 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 			if err != nil {
 				return err
 			}
-			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size - r)})
-
+			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size - r), offset: foffset})
+			foffset += int64(size - r)
 		// Last block
 		case math.MaxUint64:
 			r, err := binary.ReadUvarint(idx)
 			if err != nil {
 				return err
 			}
-			f.blocks = append(f.blocks, &rblock{readData: int(size - r)})
+			f.blocks = append(f.blocks, &rblock{readData: int(size - r), offset: foffset})
+			foffset += int64(size - r)
 			return nil
 		// Deduplicated block
 		default:
@@ -237,7 +238,7 @@ func (f *fixedMemReader) readFormat1(idx io.ByteReader) error {
 
 // readFormat2 will read the header data of format 2
 // and stop at the first block.
-func (f *fixedMemReader) readFormat2(rd io.ByteReader) error {
+func (f *reader) readFormat2(rd io.ByteReader) error {
 	size, err := binary.ReadUvarint(rd)
 	if err != nil {
 		return err
@@ -260,7 +261,7 @@ func (f *fixedMemReader) readFormat2(rd io.ByteReader) error {
 
 // Read will read from the input stream and return the
 // deduplicated data.
-func (f *fixedMemReader) Read(b []byte) (int, error) {
+func (f *reader) Read(b []byte) (int, error) {
 	read := 0
 	for len(b) > 0 {
 		// Read next
@@ -292,7 +293,7 @@ func (f *fixedMemReader) Read(b []byte) (int, error) {
 
 // MaxMem returns the estimated maximum RAM usage needed to
 // unpack this content.
-func (f *fixedMemReader) MaxMem() int {
+func (f *reader) MaxMem() int {
 	if f.maxLength > 0 {
 		return int(f.maxLength) * f.size
 	}
@@ -325,7 +326,7 @@ func (f *fixedMemReader) MaxMem() int {
 // to the ready channel.
 // The function will return if the stream is finished,
 // or an error occurs
-func (f *fixedMemReader) blockReader() {
+func (f *reader) blockReader(in io.Reader) {
 	defer close(f.readerClosed)
 	defer close(f.ready)
 
@@ -336,7 +337,7 @@ func (f *fixedMemReader) blockReader() {
 		// Read it?
 		if len(b.data) != b.readData {
 			b.data = make([]byte, b.readData)
-			n, err := io.ReadFull(f.in, b.data)
+			n, err := io.ReadFull(in, b.data)
 			if err != nil {
 				b.err = err
 			} else if n != b.readData {
@@ -366,7 +367,7 @@ func (f *fixedMemReader) blockReader() {
 // and deliver them to the "ready" channel.
 // The function will return if an error occurs or
 // the stream is finished.
-func (f *fixedMemReader) streamReader() {
+func (f *reader) streamReader(stream *bufio.Reader) {
 	defer close(f.readerClosed)
 	defer close(f.ready)
 
@@ -384,13 +385,13 @@ func (f *fixedMemReader) streamReader() {
 		lastBlock := false
 
 		b.err = func() error {
-			offset, err := binary.ReadUvarint(f.stream)
+			offset, err := binary.ReadUvarint(stream)
 			if err != nil {
 				return err
 			}
 			// Read it?
 			if offset == 0 || offset == math.MaxUint64 {
-				s, err := binary.ReadUvarint(f.stream)
+				s, err := binary.ReadUvarint(stream)
 				if err != nil {
 					return err
 				}
@@ -399,7 +400,7 @@ func (f *fixedMemReader) streamReader() {
 					return fmt.Errorf("invalid size encountered at block %d, size was %d", i, size)
 				}
 				b.data = make([]byte, size)
-				n, err := io.ReadFull(f.stream, b.data)
+				n, err := io.ReadFull(stream, b.data)
 				if err != nil {
 					return err
 				} else if n != len(b.data) {
@@ -438,8 +439,61 @@ func (f *fixedMemReader) streamReader() {
 	}
 }
 
+// seekReader will read format 1 blocks and deliver them
+// to the ready channel.
+// The function will return if the stream is finished,
+// or an error occurs
+func (f *reader) seekReader(in io.ReadSeeker) {
+	defer close(f.readerClosed)
+	defer close(f.ready)
+
+	i := 1 // Current block
+	var foffset int64
+	for {
+		// Copy b, we are modifying it.
+		b := *f.blocks[i]
+
+		// Seek to offset if needed, and
+		if b.offset != foffset {
+			_, err := in.Seek(b.offset, 0)
+			if err != nil {
+				b.err = err
+			}
+		}
+		if b.err == nil {
+			b.data = make([]byte, b.readData)
+			n, err := io.ReadFull(in, b.data)
+			if err != nil {
+				b.err = err
+			} else if n != b.readData {
+				b.err = io.ErrUnexpectedEOF
+			}
+			foffset = b.offset + int64(n)
+		}
+
+		// Always release the memory of this block
+		b.last = i
+
+		// Send or close
+		select {
+		case <-f.closeReader:
+			return
+		case f.ready <- &b:
+		}
+		// Exit because of an error
+		if b.err != nil {
+			return
+		}
+		i++
+		// We read them all
+		if i == len(f.blocks) {
+			return
+		}
+	}
+}
+
 // Close the reader and shut down the running goroutines.
-func (f *fixedMemReader) Close() error {
+func (f *reader) Close() error {
 	select {
 	case <-f.readerClosed:
 	case f.closeReader <- struct{}{}:
