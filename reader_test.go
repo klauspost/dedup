@@ -180,7 +180,7 @@ func TestDynamicRoundtrip(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
 
-	const totalinput = 30<<20 + 65
+	const totalinput = 10<<20 + 65
 	input := getBufferSize(totalinput)
 
 	const size = 64 << 10
