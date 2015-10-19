@@ -80,7 +80,7 @@ type writer struct {
 	writer    func(*writer, []byte) (int, error) // Writes are forwarded here.
 	flush     func(*writer) error                // Called from Close *before* the writer is closed.
 	close     func(*writer) error                // Called from Close *after* the writer is closed.
-	split     func(*writer) error                // Called when split is called.
+	split     func(*writer)                      // Called when Split is called.
 }
 
 // block contains information about a single block
@@ -143,11 +143,11 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 	case ModeDynamic:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
-		w.writer = zw.split
+		w.split = zw.split
 	case ModeDynamicSignatures:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.writeFile
-		w.writer = zw.split
+		w.split = zw.split
 	case ModeSignaturesOnly:
 		fw := &fixedWriter{}
 		w.writer = fileSplitOnly
@@ -268,7 +268,7 @@ func (w *writer) putUint64(v uint64) error {
 }
 
 // Split content, so a new block begins with next write
-func (w *writer) Split(w *writer) {
+func (w *writer) Split() {
 	w.split(w)
 }
 
