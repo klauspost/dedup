@@ -274,11 +274,20 @@ func (w *writer) Split() {
 
 // Write contents to the deduplicator.
 func (w *writer) Write(b []byte) (n int, err error) {
+	w.mu.Lock()
+	err = w.err
+	w.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
 	return w.writer(w, b)
 }
 
 // setErr will set the error state of the writer.
 func (w *writer) setErr(err error) {
+	if err == nil {
+		return
+	}
 	w.mu.Lock()
 	w.err = err
 	w.mu.Unlock()
@@ -322,7 +331,7 @@ func streamClose(w *writer) (err error) {
 func (w *writer) Close() (err error) {
 	select {
 	case <-w.exited:
-		return nil
+		return w.err
 	default:
 	}
 	if w.flush != nil {
@@ -341,8 +350,7 @@ func (w *writer) Close() (err error) {
 			return err
 		}
 	}
-
-	return nil
+	return w.err
 }
 
 // hasher will hash incoming blocks
@@ -358,7 +366,8 @@ func (w *writer) hasher() {
 			return
 		}
 		if int(n) != len(b.data) {
-			panic("short write monkey")
+			w.setErr(errors.New("short copy in hasher"))
+			return
 		}
 		_ = h.Sum(b.sha1Hash[:0])
 		b.hashDone <- nil
@@ -383,14 +392,19 @@ func (w *writer) blockWriter() {
 				return
 			}
 			if int(n) != len(b.data) {
-				panic("short write on copy")
+				// This should not be possible with io.copy without an error,
+				// but we test anyway.
+				w.setErr(errors.New("error: short write on copy"))
+				return
 			}
 			w.putUint64(0)
 			w.putUint64(uint64(w.maxSize) - uint64(n))
 		} else {
 			offset := b.N - match
 			if offset <= 0 {
-				panic("negative offset, should be impossible")
+				// should be impossible, indicated an internal error
+				w.setErr(errors.New("internal error: negative offset"))
+				return
 			}
 			w.putUint64(uint64(offset))
 		}
@@ -441,12 +455,17 @@ func (w *writer) blockStreamWriter() {
 				return
 			}
 			if int(n) != len(b.data) {
-				panic("short write")
+				// This should not be possible with io.Copy without an error,
+				// but we test anyway.
+				w.setErr(errors.New("error: short write on copy"))
+				return
 			}
 		} else {
 			offset := b.N - match
 			if offset <= 0 {
-				panic("negative offset, should be impossible")
+				// should be impossible, indicated an internal error
+				w.setErr(errors.New("internal error: negative offset"))
+				return
 			}
 			w.putUint64(uint64(offset))
 		}
