@@ -611,33 +611,38 @@ func newZpaqWriter(maxSize uint) *zpaqWriter {
 // This is different from a normal Rabin filter, which uses a large fixed-sized dependency window
 // and two multiply operations, one at the window entry and the inverse at the window exit.
 func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
+	// Transfer to local variables ~30% faster.
 	c1 := z.c1
+	h := z.h
+	off := r.off
 	for _, c := range b {
 		if c == z.o1[c1] {
-			z.h = (z.h + uint32(c) + 1) * 314159265
+			h = (h + uint32(c) + 1) * 314159265
 		} else {
-			z.h = (z.h + uint32(c) + 1) * 271828182
+			h = (h + uint32(c) + 1) * 271828182
 		}
 		z.o1[c1] = c
 		c1 = c
-		r.cur[r.off] = c
-		r.off++
+		r.cur[off] = c
+		off++
 
 		// At a break point? Send it off!
-		if (r.off >= z.minFragment && z.h < z.maxHash) || r.off >= z.maxFragment {
+		if (off >= z.minFragment && h < z.maxHash) || off >= z.maxFragment {
 			b := <-r.buffers
 			// Swap block with current
-			r.cur, b.data = b.data[:r.maxSize], r.cur[:r.off]
+			r.cur, b.data = b.data[:r.maxSize], r.cur[:off]
 			b.N = r.nblocks
 
 			r.input <- b
 			r.write <- b
 			r.nblocks++
-			r.off = 0
-			z.h = 0
+			off = 0
+			h = 0
 			c1 = 0
 		}
 	}
+	r.off = off
+	z.h = h
 	z.c1 = c1
 	return len(b), nil
 }
@@ -662,12 +667,15 @@ func (z *zpaqWriter) split(w *writer) {
 
 // Split on zpaq hash, file signatures and maximum block size.
 func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
+	// Local variables ~10% faster
 	c1 := z.c1
+	h := z.h
+	off := w.off
 
 	for i, c := range b {
 		split := false
 		v := sigmap[c]
-		if len(v) > 0 && i < len(b)-6 {
+		if len(v) > 0 && i < len(b)-7 {
 			for _, s := range v {
 				split = true
 				for j, expect := range s {
@@ -679,30 +687,32 @@ func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
 			}
 		}
 		if c == z.o1[c1] {
-			z.h = (z.h + uint32(c) + 1) * 314159265
+			h = (h + uint32(c) + 1) * 314159265
 		} else {
-			z.h = (z.h + uint32(c) + 1) * 271828182
+			h = (h + uint32(c) + 1) * 271828182
 		}
 		z.o1[c1] = c
 		c1 = c
-		w.cur[w.off] = c
-		w.off++
+		w.cur[off] = c
+		off++
 
 		// Filled the buffer? Send it off!
-		if w.off >= z.minFragment && (z.h < z.maxHash || split || w.off >= z.maxFragment) {
+		if off >= z.minFragment && (h < z.maxHash || split || off >= z.maxFragment) {
 			b := <-w.buffers
 			// Swap block with current
-			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:off]
 			b.N = w.nblocks
 
 			w.input <- b
 			w.write <- b
 			w.nblocks++
-			w.off = 0
-			z.h = 0
+			off = 0
+			h = 0
 			c1 = 0
 		}
 	}
+	w.off = off
+	z.h = h
 	z.c1 = c1
 	return len(b), nil
 }
@@ -712,7 +722,7 @@ func fileSplitOnly(w *writer, b []byte) (int, error) {
 	for i, c := range b {
 		split := false
 		v := sigmap[c]
-		if len(v) > 0 && i < len(b)-6 {
+		if len(v) > 0 && i < len(b)-7 {
 			for _, s := range v {
 				split = true
 				for j, expect := range s {
