@@ -576,7 +576,7 @@ type zpaqWriter struct {
 // don't affect the break point.
 // This makes it likely for two files to still have identical fragments far away from any edits.
 func newZpaqWriter(maxSize uint) *zpaqWriter {
-	fragment := math.Log2(float64(maxSize) / (64 * 4))
+	fragment := math.Log2(float64(maxSize) / (64 * 64))
 	mh := math.Exp2(22 - fragment)
 	return &zpaqWriter{
 		maxFragment: int(maxSize),
