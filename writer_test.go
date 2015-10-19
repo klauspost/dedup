@@ -4,24 +4,31 @@ import (
 	"testing"
 
 	"bytes"
-	"crypto/rand"
 	"io"
+	"math/rand"
 
 	"io/ioutil"
 
 	"github.com/klauspost/dedup"
 )
 
+// Returns a deterministic buffer of size n
+func getBufferSize(n int) *bytes.Buffer {
+	rand.Seed(0)
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(rand.Intn(255))
+	}
+	return bytes.NewBuffer(b)
+}
+
 func TestFixedWriter(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -60,14 +67,11 @@ func TestFixedWriter(t *testing.T) {
 func TestFixedWriterLimit(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
 	const limit = 9
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -116,13 +120,10 @@ func TestFixedWriterLimit(t *testing.T) {
 func TestDynamicWriter(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -156,13 +157,10 @@ func TestDynamicWriter(t *testing.T) {
 
 func TestFixedStreamWriter(t *testing.T) {
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -198,13 +196,10 @@ func TestFixedStreamWriter(t *testing.T) {
 
 func TestDynamicStreamWriter(t *testing.T) {
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -236,13 +231,9 @@ func TestDynamicStreamWriter(t *testing.T) {
 }
 
 func BenchmarkFixedWriter64K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -259,7 +250,7 @@ func BenchmarkFixedWriter64K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size, 0)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -267,13 +258,9 @@ func BenchmarkFixedWriter64K(t *testing.B) {
 }
 
 func BenchmarkFixedWriter4K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 4 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -290,7 +277,7 @@ func BenchmarkFixedWriter4K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, size, 0)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -299,13 +286,9 @@ func BenchmarkFixedWriter4K(t *testing.B) {
 
 // Maximum block size:64k
 func BenchmarkDynamicWriter64K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -322,7 +305,7 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamic, size, 0)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,13 +314,9 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 
 // Maximum block size: 64k
 func BenchmarkDynamicSigsWriter64K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -354,7 +333,7 @@ func BenchmarkDynamicSigsWriter64K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamicSignatures, size, 0)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -363,13 +342,9 @@ func BenchmarkDynamicSigsWriter64K(t *testing.B) {
 
 // Maximum block size: 64k
 func BenchmarkSigsOnlyWriter64K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -386,20 +361,16 @@ func BenchmarkSigsOnlyWriter64K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeSignaturesOnly, size, 0)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 func BenchmarkFixedStreamWriter4K(t *testing.B) {
-	input := &bytes.Buffer{}
-
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 4 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -416,7 +387,7 @@ func BenchmarkFixedStreamWriter4K(t *testing.B) {
 		input = bytes.NewBuffer(b)
 		w, _ := dedup.NewStreamWriter(ioutil.Discard, dedup.ModeFixed, size, 10)
 		io.Copy(w, input)
-		err = w.Close()
+		err := w.Close()
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -2,7 +2,6 @@ package dedup_test
 
 import (
 	"bytes"
-	"crypto/rand"
 	"io"
 	"testing"
 
@@ -14,13 +13,10 @@ import (
 func TestReader(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10<<20 + 65
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -70,13 +66,10 @@ func TestReader(t *testing.T) {
 
 func TestReaderStream(t *testing.T) {
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10<<20 + 65
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -126,13 +119,10 @@ func TestReaderStream(t *testing.T) {
 func TestSeekReader(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 50<<20 + 65
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -183,14 +173,11 @@ func TestSeekReader(t *testing.T) {
 func TestDynamicRoundtrip(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10<<20 + 65
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const size = 256 << 10
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
 	for i := 0; i < 50; i++ {
@@ -240,13 +227,10 @@ func TestDynamicRoundtrip(t *testing.T) {
 func BenchmarkReader64K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 64 << 10
 	b := input.Bytes()
 	// Create some duplicates
@@ -297,13 +281,10 @@ func BenchmarkReader64K(t *testing.B) {
 func BenchmarkReader4K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
-	input := &bytes.Buffer{}
 
 	const totalinput = 10 << 20
-	_, err := io.CopyN(input, rand.Reader, totalinput)
-	if err != nil {
-		t.Fatal(err)
-	}
+	input := getBufferSize(totalinput)
+
 	const size = 4 << 10
 	b := input.Bytes()
 	// Create some duplicates
