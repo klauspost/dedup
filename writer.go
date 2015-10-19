@@ -62,24 +62,25 @@ const (
 )
 
 type writer struct {
-	blks      io.Writer                 // Block data writer
-	idx       io.Writer                 // Index writer
-	maxSize   int                       // Maximum Block size
-	maxBlocks int                       // Maximum backreference distance
-	index     map[[hasher.Size]byte]int // Known hashes and their index
-	input     chan *block               // Channel containing blocks to be hashed
-	write     chan *block               // Channel containing (ordered) blocks to be written
-	exited    chan struct{}             // Closed when the writer exits.
-	cur       []byte                    // Current block being written
-	off       int                       // Write offset in current block
-	buffers   chan *block               // Buffers ready for re-use.
-	vari64    []byte                    // Temporary buffer for writing varints
-	err       error                     // Error state
-	mu        sync.Mutex                // Mutex for error state
-	nblocks   int                       // Current block number. First block is 1.
-	writer    func(*writer, []byte) (int, error)
-	flush     func(*writer) error
-	close     func(*writer) error
+	blks      io.Writer                          // Block data writer
+	idx       io.Writer                          // Index writer
+	maxSize   int                                // Maximum Block size
+	maxBlocks int                                // Maximum backreference distance
+	index     map[[hasher.Size]byte]int          // Known hashes and their index
+	input     chan *block                        // Channel containing blocks to be hashed
+	write     chan *block                        // Channel containing (ordered) blocks to be written
+	exited    chan struct{}                      // Closed when the writer exits.
+	cur       []byte                             // Current block being written
+	off       int                                // Write offset in current block
+	buffers   chan *block                        // Buffers ready for re-use.
+	vari64    []byte                             // Temporary buffer for writing varints
+	err       error                              // Error state
+	mu        sync.Mutex                         // Mutex for error state
+	nblocks   int                                // Current block number. First block is 1.
+	writer    func(*writer, []byte) (int, error) // Writes are forwarded here.
+	flush     func(*writer) error                // Called from Close *before* the writer is closed.
+	close     func(*writer) error                // Called from Close *after* the writer is closed.
+	split     func(*writer) error                // Called when split is called.
 }
 
 // block contains information about a single block
@@ -138,14 +139,19 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 	case ModeFixed:
 		fw := &fixedWriter{}
 		w.writer = fw.write
+		w.split = fw.split
 	case ModeDynamic:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
+		w.writer = zw.split
 	case ModeDynamicSignatures:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.writeFile
+		w.writer = zw.split
 	case ModeSignaturesOnly:
+		fw := &fixedWriter{}
 		w.writer = fileSplitOnly
+		w.split = fw.split
 	default:
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
@@ -262,19 +268,8 @@ func (w *writer) putUint64(v uint64) error {
 }
 
 // Split content, so a new block begins with next write
-func (w *writer) Split() {
-	if w.off == 0 {
-		return
-	}
-	b := <-w.buffers
-	// Swap block with current
-	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
-	b.N = w.nblocks
-
-	w.input <- b
-	w.write <- b
-	w.nblocks++
-	w.off = 0
+func (w *writer) Split(w *writer) {
+	w.split(w)
 }
 
 // Write contents to the deduplicator.
@@ -497,6 +492,22 @@ func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 	return written, nil
 }
 
+// Split content, so a new block begins with next write
+func (f *fixedWriter) split(w *writer) {
+	if w.off == 0 {
+		return
+	}
+	b := <-w.buffers
+	// Swap block with current
+	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+	b.N = w.nblocks
+
+	w.input <- b
+	w.write <- b
+	w.nblocks++
+	w.off = 0
+}
+
 // Returns an approximate Birthday probability calculation
 // based on the number of blocks given and the hash size.
 //
@@ -610,6 +621,24 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 	}
 	z.c1 = c1
 	return len(b), nil
+}
+
+// Split content, so a new block begins with next write
+func (z *zpaqWriter) split(w *writer) {
+	if w.off == 0 {
+		return
+	}
+	b := <-w.buffers
+	// Swap block with current
+	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+	b.N = w.nblocks
+
+	w.input <- b
+	w.write <- b
+	w.nblocks++
+	w.off = 0
+	z.h = 0
+	z.c1 = 0
 }
 
 // Split on zpaq hash, file signatures and maximum block size.
