@@ -62,6 +62,12 @@ func TestReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	blocks := r.BlockSizes()
+	for _, s := range blocks[:len(blocks)-1] {
+		if s != size {
+			t.Fatal("wrong size, expected", size, "got", s)
+		}
+	}
 }
 
 func TestReaderStream(t *testing.T) {
@@ -174,7 +180,7 @@ func TestDynamicRoundtrip(t *testing.T) {
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
 
-	const totalinput = 10<<20 + 65
+	const totalinput = 30<<20 + 65
 	input := getBufferSize(totalinput)
 
 	const size = 64 << 10
@@ -207,6 +213,15 @@ func TestDynamicRoundtrip(t *testing.T) {
 	}
 
 	t.Log("Maximum estimated memory:", r.MaxMem(), "bytes")
+	blocks := r.BlockSizes()
+	avg := 0
+	for _, v := range blocks {
+		if v > size {
+			t.Fatal("too big block returned, should not be >", size, "was", v)
+		}
+		avg += v
+	}
+	t.Log("Average block size:", avg/len(blocks), "bytes")
 
 	out, err := ioutil.ReadAll(r)
 	if err != io.EOF && err != nil {

@@ -19,9 +19,22 @@ type Reader interface {
 	MaxMem() int
 }
 
-//
+// IndexedReader gives access to internal information on
+// block sizes available on indexed streams.
+type IndexedReader interface {
+	Reader
+
+	// Blocksizes will return the sizes of each block.
+	// Will be available if an index was provided.
+	BlockSizes() []int
+}
+
 type reader struct {
-	blocks       []*rblock
+	streamReader
+	blocks []*rblock
+}
+
+type streamReader struct {
 	size         int
 	maxLength    uint64 // Maxmimum backreference count
 	curBlock     int
@@ -53,15 +66,16 @@ var ErrUnknownFormat = errors.New("unknown index format")
 // NewReader returns a reader that will decode the supplied index and data stream.
 //
 // This is compatible content from the NewWriter function.
+// The function will decode the index before returning.
 //
 // When you are done with the Reader, use Close to release resources.
-func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
-	f := &reader{
+func NewReader(index io.Reader, blocks io.Reader) (IndexedReader, error) {
+	f := &reader{streamReader: streamReader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
 		curBlock:     0,
-	}
+	}}
 	idx := bufio.NewReader(index)
 	format, err := binary.ReadUvarint(idx)
 	if err != nil {
@@ -86,7 +100,7 @@ func NewReader(index io.Reader, blocks io.Reader) (Reader, error) {
 //
 // When you are done with the Reader, use Close to release resources.
 func NewStreamReader(in io.Reader) (Reader, error) {
-	f := &reader{
+	f := &streamReader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
@@ -118,16 +132,17 @@ func NewStreamReader(in io.Reader) (Reader, error) {
 // This is compatible content from the NewWriter function.
 //
 // No blocks will be kept in memory, but the block data input must be seekable.
+// The function will decode the index before returning.
 //
 // When you are done with the Reader, use Close to release resources.
-func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (Reader, error) {
-	f := &reader{
+func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (IndexedReader, error) {
+	f := &reader{streamReader: streamReader{
 		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
 		closeReader:  make(chan struct{}, 0),
 		readerClosed: make(chan struct{}, 0),
 		curBlock:     0,
 		maxLength:    8, // We have 8 blocks readahead.
-	}
+	}}
 	idx := bufio.NewReader(index)
 	format, err := binary.ReadUvarint(idx)
 	if err != nil {
@@ -140,49 +155,11 @@ func NewSeekReader(index io.Reader, blocks io.ReadSeeker) (Reader, error) {
 	default:
 		err = ErrUnknownFormat
 	}
+
 	go f.seekReader(blocks)
 
-	//fmt.Println(f.blocks)
 	return f, err
 }
-
-/*
-// NewStreamReader returns a reader that will decode the supplied data stream.
-//
-// This is compatible content from the NewStreamWriter function.
-//
-// No blocks will be kept in memory, but the block data input must be seekable.
-//
-// When you are done with the Reader, use Close to release resources.
-func NewSeekStreamReader(in io.ReadSeeker) (Reader, error) {
-	f := &fixedMemReader{
-		ready:        make(chan *rblock, 8), // Read up to 8 blocks ahead
-		closeReader:  make(chan struct{}, 0),
-		readerClosed: make(chan struct{}, 0),
-		curBlock:     0,
-	}
-	br := bufio.NewReader(in)
-	format, err := binary.ReadUvarint(br)
-	if err != nil {
-		return nil, err
-	}
-
-	switch format {
-	case 2:
-		err = f.readFormat2(br)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, ErrUnknownFormat
-	}
-
-	f.stream = br
-	go f.streamReader()
-
-	return f, nil
-}
-*/
 
 // readFormat1 will read the index of format 1
 // and prepare decoding
@@ -238,7 +215,7 @@ func (f *reader) readFormat1(idx io.ByteReader) error {
 
 // readFormat2 will read the header data of format 2
 // and stop at the first block.
-func (f *reader) readFormat2(rd io.ByteReader) error {
+func (f *streamReader) readFormat2(rd io.ByteReader) error {
 	size, err := binary.ReadUvarint(rd)
 	if err != nil {
 		return err
@@ -261,7 +238,7 @@ func (f *reader) readFormat2(rd io.ByteReader) error {
 
 // Read will read from the input stream and return the
 // deduplicated data.
-func (f *reader) Read(b []byte) (int, error) {
+func (f *streamReader) Read(b []byte) (int, error) {
 	read := 0
 	for len(b) > 0 {
 		// Read next
@@ -293,10 +270,16 @@ func (f *reader) Read(b []byte) (int, error) {
 
 // MaxMem returns the estimated maximum RAM usage needed to
 // unpack this content.
-func (f *reader) MaxMem() int {
+func (f *streamReader) MaxMem() int {
 	if f.maxLength > 0 {
 		return int(f.maxLength) * f.size
 	}
+	return -1
+}
+
+// MaxMem returns the estimated maximum RAM usage needed to
+// unpack this content.
+func (f *reader) MaxMem() int {
 	i := 1 // Current block
 	curUse := 0
 	maxUse := 0
@@ -320,6 +303,18 @@ func (f *reader) MaxMem() int {
 		}
 	}
 	return maxUse
+}
+
+func (f *reader) BlockSizes() []int {
+	if len(f.blocks) < 2 {
+		return nil
+	}
+
+	ret := make([]int, len(f.blocks)-1)
+	for i, bl := range f.blocks[1:] {
+		ret[i] = bl.readData
+	}
+	return ret
 }
 
 // blockReader will read format 1 blocks and deliver them
@@ -367,7 +362,7 @@ func (f *reader) blockReader(in io.Reader) {
 // and deliver them to the "ready" channel.
 // The function will return if an error occurs or
 // the stream is finished.
-func (f *reader) streamReader(stream *bufio.Reader) {
+func (f *streamReader) streamReader(stream *bufio.Reader) {
 	defer close(f.readerClosed)
 	defer close(f.ready)
 
@@ -493,7 +488,7 @@ func (f *reader) seekReader(in io.ReadSeeker) {
 }
 
 // Close the reader and shut down the running goroutines.
-func (f *reader) Close() error {
+func (f *streamReader) Close() error {
 	select {
 	case <-f.readerClosed:
 	case f.closeReader <- struct{}{}:
