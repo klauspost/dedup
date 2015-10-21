@@ -475,7 +475,7 @@ func (w *writer) blockStreamWriter() {
 		w.index[b.sha1Hash] = b.N
 
 		// Purge old entries once in a while
-		if w.maxBlocks > 0 && b.N&127 == 127 {
+		if w.maxBlocks > 0 && b.N&65535 == 65535 {
 			for k, v := range w.index {
 				if (v - match) > w.maxBlocks {
 					delete(w.index, k)
