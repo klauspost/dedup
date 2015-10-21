@@ -617,35 +617,38 @@ func newZpaqWriter(maxSize uint) *zpaqWriter {
 // This is different from a normal Rabin filter, which uses a large fixed-sized dependency window
 // and two multiply operations, one at the window entry and the inverse at the window exit.
 func (z *zpaqWriter) write(w *writer, b []byte) (int, error) {
+	// Transfer to local variables ~30% faster.
 	c1 := z.c1
+	h := z.h
+	off := w.off
 	for _, c := range b {
 		if c == z.o1[c1] {
-			z.h = (z.h + uint32(c) + 1) * 314159265
+			h = (h + uint32(c) + 1) * 314159265
 		} else {
-			z.h = (z.h + uint32(c) + 1) * 271828182
+			h = (h + uint32(c) + 1) * 271828182
 		}
 		z.o1[c1] = c
 		c1 = c
-		w.cur[w.off] = c
-		w.off++
+		w.cur[off] = c
+		off++
 
 		// At a break point? Send it off!
-		if (w.off >= z.minFragment && z.h < z.maxHash) || w.off >= z.maxFragment {
+		if (off >= z.minFragment && h < z.maxHash) || off >= z.maxFragment {
 			b := <-w.buffers
 			// Swap block with current
-			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
-			w.mu.Lock()
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:off]
 			b.N = w.nblocks
-			w.nblocks++
-			w.mu.Unlock()
 
 			w.input <- b
 			w.write <- b
-			w.off = 0
-			z.h = 0
+			w.nblocks++
+			off = 0
+			h = 0
 			c1 = 0
 		}
 	}
+	w.off = off
+	z.h = h
 	z.c1 = c1
 	return len(b), nil
 }

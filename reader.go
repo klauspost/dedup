@@ -15,6 +15,8 @@ import (
 type Reader interface {
 	io.ReadCloser
 
+	io.WriterTo
+
 	// MaxMem returns the *maximum* memory required to decode the stream.
 	MaxMem() int
 }
@@ -262,6 +264,32 @@ func (f *streamReader) Read(b []byte) (int, error) {
 		f.curData = f.curData[n:]
 	}
 	return read, nil
+}
+
+// WriteTo writes data to w until there's no more data to write or when an error occurs.
+//The return value n is the number of bytes written.
+// Any error encountered during the write is also returned.
+func (f *streamReader) WriteTo(w io.Writer) (int64, error) {
+	written := int64(0)
+	for {
+		f.curBlock++
+		next, ok := <-f.ready
+		if !ok {
+			return written, io.EOF
+		}
+		if next.err != nil {
+			return written, next.err
+		}
+		// We don't want to keep it, if this is the last block
+		if f.curBlock == next.last {
+			next.data = nil
+		}
+		n, err := w.Write(f.curData)
+		written += int64(n)
+		if err != nil {
+			return written, err
+		}
+	}
 }
 
 // MaxMem returns the estimated maximum RAM usage needed to
