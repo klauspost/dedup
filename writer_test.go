@@ -40,7 +40,7 @@ func TestFixedWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, 10)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, size*10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestFixedWriterLimit(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, limit)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, limit*size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestDynamicWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size, 10*8)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeDynamic, size, 10*8*size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestFixedStreamWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, size, 10)
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, size, 10*size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestDynamicStreamWriter(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewStreamWriter(&data, dedup.ModeDynamic, size, 10*8)
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeDynamic, size, 10*8*size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func BenchmarkFixedStreamWriter4K(t *testing.B) {
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
 		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewStreamWriter(ioutil.Discard, dedup.ModeFixed, size, 10)
+		w, _ := dedup.NewStreamWriter(ioutil.Discard, dedup.ModeFixed, size, 10*size)
 		io.Copy(w, input)
 		err := w.Close()
 		if err != nil {

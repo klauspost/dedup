@@ -36,6 +36,10 @@ const HashSize = hasher.Size
 // The smallest "maximum" block size allowed.
 const MinBlockSize = 512
 
+// ErrMaxMemoryTooSmall is returned if the encoder isn't allowed to store
+// even 1 block.
+var ErrMaxMemoryTooSmall = errors.New("there must be at be space for 1 block")
+
 // Deduplication mode used to determine how input is split.
 type Mode int
 
@@ -99,21 +103,21 @@ var ErrSizeTooSmall = errors.New("maximum block size too small. must be at least
 // The index stream will contain information about which blocks are deduplicated
 // and the block stream will contain uncompressed data blocks.
 //
-// The maximum memory use of the decoder is maxSize*maxBlocks.
-// Set maxBlocks to 0 to disable decoder memory limit.
+// You can set the maximum memory for the decoder to use.
+// This limits the length a match can be made.
+// This is very conservative, so you can set this at the absolute limit of memory available.
+// If you use dynamic blocks, also note that the average size is 1/4th of the maximum block size.
+// Set maxMemory to 0 to disable decoder memory limit.
 //
 // This function returns data that is compatible with the NewReader function.
 // The returned writer must be closed to flush the remaining data.
-func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
+func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxMemory uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
 	var bufmul = 256 << 10 / int(maxSize)
 	if bufmul < 2 {
 		bufmul = 2
-	}
-	if maxBlocks < 0 {
-		maxBlocks = 0
 	}
 
 	w := &writer{
@@ -128,7 +132,7 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 		vari64:    make([]byte, binary.MaxVarintLen64),
 		buffers:   make(chan *block, ncpu*bufmul),
 		nblocks:   1,
-		maxBlocks: int(maxBlocks),
+		maxBlocks: int(maxMemory / maxSize),
 	}
 
 	switch mode {
@@ -182,11 +186,12 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 //
 // This function returns data that is compatible with the NewStreamReader function.
 //
-// You must specify the maximum number of blocks to keep in memory.
-// The maximum memory use of the decoder is maxSize*maxBlocks.
+// You can must set the maximum memory for the decoder to use.
+// This limits the length a match can be made.
+// If you use dynamic blocks, also note that the average size is 1/4th of the maximum block size.
 //
 // The returned writer must be closed to flush the remaining data.
-func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer, error) {
+func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
 	// Constant below appears to be sweet spot measured with 4K blocks.
@@ -194,8 +199,8 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 	if bufmul < 2 {
 		bufmul = 2
 	}
-	if maxBlocks < 0 {
-		maxBlocks = 0
+	if maxMemory < maxSize {
+		return nil, ErrMaxMemoryTooSmall
 	}
 	w := &writer{
 		idx:       out,
@@ -208,7 +213,7 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 		vari64:    make([]byte, binary.MaxVarintLen64),
 		buffers:   make(chan *block, ncpu*bufmul),
 		nblocks:   1,
-		maxBlocks: int(maxBlocks),
+		maxBlocks: int(maxMemory / maxSize),
 	}
 
 	switch mode {
@@ -233,9 +238,9 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 	}
 
 	w.close = streamClose
-	w.putUint64(2)                 // Format
-	w.putUint64(uint64(maxSize))   // Maximum block size
-	w.putUint64(uint64(maxBlocks)) // Maximum backreference length
+	w.putUint64(2)                           // Format
+	w.putUint64(uint64(maxSize))             // Maximum block size
+	w.putUint64(uint64(maxMemory / maxSize)) // Maximum backreference length
 
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {

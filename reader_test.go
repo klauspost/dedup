@@ -87,7 +87,7 @@ func TestReaderStream(t *testing.T) {
 		copy(dst, src)
 	}
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, size, 10)
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, size, 10*size)
 	if err != nil {
 		t.Fatal(err)
 	}

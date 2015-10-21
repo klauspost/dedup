@@ -230,6 +230,9 @@ func (f *streamReader) readFormat2(rd io.ByteReader) error {
 	if err != nil {
 		return err
 	}
+	if maxLength < 1 {
+		return ErrMaxMemoryTooSmall
+	}
 	f.maxLength = maxLength
 	return nil
 }
