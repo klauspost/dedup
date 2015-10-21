@@ -90,7 +90,6 @@ func NewReader(index io.Reader, blocks io.Reader) (IndexedReader, error) {
 	}
 	go f.blockReader(blocks)
 
-	//fmt.Println(f.blocks)
 	return f, err
 }
 
@@ -228,9 +227,6 @@ func (f *streamReader) readFormat2(rd io.ByteReader) error {
 	maxLength, err := binary.ReadUvarint(rd)
 	if err != nil {
 		return err
-	}
-	if maxLength < 1 {
-		return ErrMaxBlocksTooSmall
 	}
 	f.maxLength = maxLength
 	return nil

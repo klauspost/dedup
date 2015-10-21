@@ -24,6 +24,10 @@ type Writer interface {
 	// MemUse returns an approximate maximum memory use in bytes for
 	// encoder (Writer) and decoder (Reader) for the given number of bytes.
 	MemUse(bytes int) (encoder, decoder int64)
+
+	// Returns the current number of blocks.
+	// Blocks may still be processing.
+	Blocks() int
 }
 
 // Size of the underlying hash in bytes for those interested.
@@ -42,7 +46,7 @@ const (
 	// In fixed block sizes.
 	// It can be helpful to use the "Split" function to reset offset, which
 	// will reset duplication search at the position you are at.
-	ModeFixed Mode = iota
+	ModeFixed Mode = 0
 
 	// Dynamic block size.
 	//
@@ -50,15 +54,7 @@ const (
 	// to it into dynamically sized blocks.
 	// The size given indicates the maximum block size. Average size is usually maxSize/4.
 	// Minimum block size is maxSize/64.
-	ModeDynamic
-
-	// Dynamic block size, including split on file signatures.
-	// There are a number of typical file signartures builtin,
-	// or you can use AddSignature to add your own.
-	ModeDynamicSignatures
-
-	// Dynamic block size only split on file signatures
-	ModeSignaturesOnly
+	ModeDynamic = 1
 )
 
 type writer struct {
@@ -144,14 +140,16 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
 		w.split = zw.split
-	case ModeDynamicSignatures:
-		zw := newZpaqWriter(maxSize)
-		w.writer = zw.writeFile
-		w.split = zw.split
-	case ModeSignaturesOnly:
-		fw := &fixedWriter{}
-		w.writer = fileSplitOnly
-		w.split = fw.split
+		/*
+			case ModeDynamicSignatures:
+				zw := newZpaqWriter(maxSize)
+				w.writer = zw.writeFile
+				w.split = zw.split
+			case ModeSignaturesOnly:
+				fw := &fixedWriter{}
+				w.writer = fileSplitOnly
+				w.split = fw.split
+		*/
 	default:
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
@@ -176,10 +174,6 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxBlocks 
 	return w, nil
 }
 
-// ErrSizeTooSmall is returned if the requested block size is smaller than
-// hash size.
-var ErrMaxBlocksTooSmall = errors.New("there must be at least 1 block backreference")
-
 // NewStreamWriter will create a deduplicator that will split the contents written
 // to it into blocks and de-duplicate these.
 //
@@ -200,8 +194,8 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 	if bufmul < 2 {
 		bufmul = 2
 	}
-	if maxBlocks < 1 {
-		return nil, ErrMaxBlocksTooSmall
+	if maxBlocks < 0 {
+		maxBlocks = 0
 	}
 	w := &writer{
 		idx:       out,
@@ -224,11 +218,12 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxBlocks uint) (Writer,
 	case ModeDynamic:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
-	case ModeDynamicSignatures:
-		zw := newZpaqWriter(maxSize)
-		w.writer = zw.writeFile
-	case ModeSignaturesOnly:
-		w.writer = fileSplitOnly
+		/*	case ModeDynamicSignatures:
+				zw := newZpaqWriter(maxSize)
+				w.writer = zw.writeFile
+			case ModeSignaturesOnly:
+				w.writer = fileSplitOnly
+		*/
 	default:
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
@@ -270,6 +265,13 @@ func (w *writer) putUint64(v uint64) error {
 // Split content, so a new block begins with next write
 func (w *writer) Split() {
 	w.split(w)
+}
+
+func (w *writer) Blocks() int {
+	w.mu.Lock()
+	b := w.nblocks - 1
+	w.mu.Unlock()
+	return b
 }
 
 // Write contents to the deduplicator.
@@ -500,11 +502,13 @@ func (f *fixedWriter) write(w *writer, b []byte) (n int, err error) {
 			b := <-w.buffers
 			// Swap block with current
 			w.cur, b.data = b.data, w.cur
+			w.mu.Lock()
 			b.N = w.nblocks
+			w.nblocks++
+			w.mu.Unlock()
 
 			w.input <- b
 			w.write <- b
-			w.nblocks++
 			w.off = 0
 		}
 	}
@@ -519,11 +523,13 @@ func (f *fixedWriter) split(w *writer) {
 	b := <-w.buffers
 	// Swap block with current
 	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+	w.mu.Lock()
 	b.N = w.nblocks
+	w.nblocks++
+	w.mu.Unlock()
 
 	w.input <- b
 	w.write <- b
-	w.nblocks++
 	w.off = 0
 }
 
@@ -610,7 +616,7 @@ func newZpaqWriter(maxSize uint) *zpaqWriter {
 // and the other is even but not a multiple of 4 (missed prediction, 1 bit shift left).
 // This is different from a normal Rabin filter, which uses a large fixed-sized dependency window
 // and two multiply operations, one at the window entry and the inverse at the window exit.
-func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
+func (z *zpaqWriter) write(w *writer, b []byte) (int, error) {
 	c1 := z.c1
 	for _, c := range b {
 		if c == z.o1[c1] {
@@ -620,20 +626,22 @@ func (z *zpaqWriter) write(r *writer, b []byte) (int, error) {
 		}
 		z.o1[c1] = c
 		c1 = c
-		r.cur[r.off] = c
-		r.off++
+		w.cur[w.off] = c
+		w.off++
 
 		// At a break point? Send it off!
-		if (r.off >= z.minFragment && z.h < z.maxHash) || r.off >= z.maxFragment {
-			b := <-r.buffers
+		if (w.off >= z.minFragment && z.h < z.maxHash) || w.off >= z.maxFragment {
+			b := <-w.buffers
 			// Swap block with current
-			r.cur, b.data = b.data[:r.maxSize], r.cur[:r.off]
-			b.N = r.nblocks
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+			w.mu.Lock()
+			b.N = w.nblocks
+			w.nblocks++
+			w.mu.Unlock()
 
-			r.input <- b
-			r.write <- b
-			r.nblocks++
-			r.off = 0
+			w.input <- b
+			w.write <- b
+			w.off = 0
 			z.h = 0
 			c1 = 0
 		}
@@ -650,193 +658,14 @@ func (z *zpaqWriter) split(w *writer) {
 	b := <-w.buffers
 	// Swap block with current
 	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+	w.mu.Lock()
 	b.N = w.nblocks
+	w.nblocks++
+	w.mu.Unlock()
 
 	w.input <- b
 	w.write <- b
-	w.nblocks++
 	w.off = 0
 	z.h = 0
 	z.c1 = 0
-}
-
-// Split on zpaq hash, file signatures and maximum block size.
-func (z *zpaqWriter) writeFile(w *writer, b []byte) (int, error) {
-	c1 := z.c1
-
-	for i, c := range b {
-		split := false
-		v := sigmap[c]
-		if len(v) > 0 && i < len(b)-6 {
-			for _, s := range v {
-				split = true
-				for j, expect := range s {
-					if b[j+1] != expect {
-						split = false
-						break
-					}
-				}
-			}
-		}
-		if c == z.o1[c1] {
-			z.h = (z.h + uint32(c) + 1) * 314159265
-		} else {
-			z.h = (z.h + uint32(c) + 1) * 271828182
-		}
-		z.o1[c1] = c
-		c1 = c
-		w.cur[w.off] = c
-		w.off++
-
-		// Filled the buffer? Send it off!
-		if w.off >= z.minFragment && (z.h < z.maxHash || split || w.off >= z.maxFragment) {
-			b := <-w.buffers
-			// Swap block with current
-			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
-			b.N = w.nblocks
-
-			w.input <- b
-			w.write <- b
-			w.nblocks++
-			w.off = 0
-			z.h = 0
-			c1 = 0
-		}
-	}
-	z.c1 = c1
-	return len(b), nil
-}
-
-// Split on maximum size and file signatures only.
-func fileSplitOnly(w *writer, b []byte) (int, error) {
-	for i, c := range b {
-		split := false
-		v := sigmap[c]
-		if len(v) > 0 && i < len(b)-6 {
-			for _, s := range v {
-				split = true
-				for j, expect := range s {
-					if b[j+1] != expect {
-						split = false
-						break
-					}
-				}
-			}
-		}
-		w.cur[w.off] = c
-		w.off++
-
-		// Filled the buffer? Send it off!
-		if split || w.off >= w.maxSize {
-			b := <-w.buffers
-			// Swap block with current
-			w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
-			b.N = w.nblocks
-
-			w.input <- b
-			w.write <- b
-			w.nblocks++
-			w.off = 0
-		}
-	}
-	return len(b), nil
-}
-
-// 4 times faster than map[byte][][]byte
-// 2 times faster than generated code (switch byte 0, if)
-var sigmap [256][][]byte
-
-func init() {
-	for _, sig := range signatures {
-		l := sig[0]
-		err := AddSignature(sig[1 : 1+l])
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
-// ErrSignatureTooShort is returned if AddSignature is called
-// with a signature shorter than 3 bytes
-var ErrSignatureTooShort = errors.New("signature should be at least 2 bytes")
-
-// AddSignature will add a signature that will cause a block
-// split. The signature must be more than 1 byte (at least 3 is recommended),
-// and only up to 7 bytes are compared.
-func AddSignature(b []byte) error {
-	if len(b) <= 1 {
-		return ErrSignatureTooShort
-	}
-	if len(b) > 7 {
-		b = b[:7]
-	}
-	x := sigmap[b[0]]
-	dst := make([]byte, len(b)-1)
-	copy(dst, b[1:])
-	x = append(x, dst)
-	sigmap[b[0]] = x
-	return nil
-}
-
-// File start signatures
-// 8 bytes, 1 byte length (1 to 7), 1-7 bytes identifier literals, 7-length padding.
-var signatures = [][8]byte{
-	[8]byte{3, 0x42, 0x5A, 0x68, 0, 0, 0, 0},             //bzip 2
-	[8]byte{3, 0x1f, 0x8b, 0x00, 0, 0, 0, 0},             //gzip (store)
-	[8]byte{3, 0x1f, 0x8b, 0x08, 0, 0, 0, 0},             //gzip (deflate)
-	[8]byte{6, 0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0},    //GIF87a
-	[8]byte{6, 0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0},    //GIF89a
-	[8]byte{4, 0x49, 0x49, 0x2A, 0x0, 0, 0, 0},           //TIFF
-	[8]byte{4, 0x4D, 0x4D, 0x00, 0x2A, 0, 0, 0},          //TIFF
-	[8]byte{3, 0xFF, 0xD8, 0xFF, 0, 0, 0, 0},             //JPEG
-	[8]byte{4, 0x46, 0x4F, 0x52, 0x4D, 0, 0, 0},          //IFF (FORM)
-	[8]byte{4, 0x50, 0x4B, 0x03, 0x04, 0, 0, 0},          //ZIP
-	[8]byte{4, 0x50, 0x4B, 0x07, 0x08, 0, 0, 0},          //ZIP
-	[8]byte{7, 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00}, //RAR
-	[8]byte{4, 0x7F, 0x45, 0x4C, 0x46, 0, 0, 0},          //ELF
-	[8]byte{7, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A}, //PNG
-	[8]byte{4, 0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0},          //Java Class
-	[8]byte{3, 0xEF, 0xBB, 0xBF, 0, 0, 0, 0},             //Unicode byte order mark
-	[8]byte{4, 0xFE, 0xED, 0xFA, 0xCE, 0, 0, 0},          //Mach-O binary (32-bit)
-	[8]byte{4, 0xFE, 0xED, 0xFA, 0xCF, 0, 0, 0},          //Mach-O binary (64-bit)
-	[8]byte{4, 0xCE, 0xFA, 0xED, 0xFE, 0, 0, 0},          //Mach-O binary (32-bit)
-	[8]byte{4, 0xCF, 0xFA, 0xED, 0xFE, 0, 0, 0},          //Mach-O binary (64-bit)
-	[8]byte{4, 0xFF, 0xFE, 0x00, 0x00, 0, 0, 0},          //BOM 32-bit Unicode Transfer Format
-	[8]byte{4, 0x50, 0x45, 0x00, 0x00, 0, 0, 0},          //PE (PE Header)
-	[8]byte{4, 0x25, 0x21, 0x50, 0x53, 0, 0, 0},          //PS
-	[8]byte{4, 0x25, 0x50, 0x44, 0x46, 0, 0, 0},          //PDF
-	[8]byte{7, 0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF}, //ASF
-	[8]byte{7, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE}, //WMV
-	[8]byte{7, 0x24, 0x53, 0x44, 0x49, 0x30, 0x30, 0x30}, //SDI
-	[8]byte{4, 0x4F, 0x67, 0x67, 0x53, 0, 0, 0},          //OGG
-	[8]byte{4, 0x38, 0x42, 0x50, 0x53, 0, 0, 0},          //PSD
-	[8]byte{4, 0x52, 0x49, 0x46, 0x46, 0, 0, 0},          //WAV/AVI
-	[8]byte{3, 0x49, 0x44, 0x33, 0, 0, 0, 0},             //MP3 (ID3 v2, all versions)
-	[8]byte{5, 0x43, 0x44, 0x30, 0x30, 0x31, 0, 0},       //ISO
-	[8]byte{3, 0x4B, 0x44, 0x4D, 0, 0, 0, 0},             //VMDK
-	[8]byte{4, 0x66, 0x4C, 0x61, 0x43, 0, 0, 0},          //FLAC
-	[8]byte{4, 0x4D, 0x54, 0x68, 0x64, 0, 0, 0},          //MIDI
-	[8]byte{5, 0x1A, 0x45, 0xDF, 0xA3, 0, 0},             //MKV
-	[8]byte{5, 0x1F, 0x43, 0xB6, 0x75, 0, 0},             //MKV Cluster
-	[8]byte{4, 0x46, 0x4c, 0x56, 0x01, 0, 0, 0},          //FLV (old format)
-	[8]byte{7, 0x66, 0x74, 0x79, 0x70, 0x33, 0x67, 0x70}, //3GG/MP4
-	[8]byte{6, 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0},    //7zip
-	[8]byte{6, 0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00, 0},    //XZ format
-	[8]byte{7, 0x42, 0x4f, 0x4f, 0x4b, 0x4d, 0x4f, 0x42}, //MOBI book format
-	[8]byte{7, 0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20}, //SQLite DB
-	[8]byte{6, 0x7b, 0x5c, 0x72, 0x74, 0x66, 0x31, 0},    //RTF '{\rtf1\'
-	[8]byte{7, '<', '!', 'D', 'O', 'C', 'T', 'Y'},        //HTML Doctype
-	[8]byte{4, 0x49, 0x54, 0x53, 0x46, 0, 0, 0},          //CHM Fomrat
-	[8]byte{6, '<', '?', 'x', 'm', 'l', ' ', 0},          //XML Doctype
-	[8]byte{5, 0x2e, 0x70, 0x6e, 0x20, 0x30, 0, 0},       //troff page #0
-	[8]byte{4, 0xfe, 0x62, 0x69, 0x6e, 0, 0, 0},          //MySQL binlog
-	[8]byte{5, 'K', 'D', 'M', 'V', 0x01, 0, 0},           //Virtual machine disk image
-	[8]byte{5, 'M', 'R', 'V', 'N', 0x01, 0, 0},           //VMware nvram image
-
-	// Exotics:
-	//[8]byte{7, 0x46, 0x55, 0x4a, 0x49, 0x46, 0x49, 0x4c}, //FUJI Raw format
-	//[8]byte{7, 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a}, //MSI format
-	//[8]byte{5, 0x46, 0x4f, 0x56, 0x62, 0x00, 0, 0}, //X3F format
-
-	//[8]byte{4, 0x50, 0x4B, 0x05, 0x06, 0, 0, 0},          //ZIP empty archive
 }

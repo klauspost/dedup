@@ -312,61 +312,6 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 	}
 }
 
-// Maximum block size: 64k
-func BenchmarkDynamicSigsWriter64K(t *testing.B) {
-	const totalinput = 10 << 20
-	input := getBufferSize(totalinput)
-
-	const size = 64 << 10
-	b := input.Bytes()
-	// Create some duplicates
-	for i := 0; i < 50; i++ {
-		// Read from 10 first blocks
-		src := b[(i%10)*size : (i%10)*size+size]
-		// Write into the following ones
-		dst := b[(10+i)*size : (i+10)*size+size]
-		copy(dst, src)
-	}
-	t.ResetTimer()
-	t.SetBytes(totalinput)
-	for i := 0; i < t.N; i++ {
-		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeDynamicSignatures, size, 0)
-		io.Copy(w, input)
-		err := w.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// Maximum block size: 64k
-func BenchmarkSigsOnlyWriter64K(t *testing.B) {
-	const totalinput = 10 << 20
-	input := getBufferSize(totalinput)
-
-	const size = 64 << 10
-	b := input.Bytes()
-	// Create some duplicates
-	for i := 0; i < 50; i++ {
-		// Read from 10 first blocks
-		src := b[(i%10)*size : (i%10)*size+size]
-		// Write into the following ones
-		dst := b[(10+i)*size : (i+10)*size+size]
-		copy(dst, src)
-	}
-	t.ResetTimer()
-	t.SetBytes(totalinput)
-	for i := 0; i < t.N; i++ {
-		input = bytes.NewBuffer(b)
-		w, _ := dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeSignaturesOnly, size, 0)
-		io.Copy(w, input)
-		err := w.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 func BenchmarkFixedStreamWriter4K(t *testing.B) {
 	const totalinput = 10 << 20
 	input := getBufferSize(totalinput)
