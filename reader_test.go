@@ -303,6 +303,7 @@ func TestReaderWriteTo(t *testing.T) {
 	}
 }
 
+// Indexed stream, 10MB input, 64K blocks
 func BenchmarkReader64K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
@@ -360,6 +361,7 @@ func BenchmarkReader64K(t *testing.B) {
 	}
 }
 
+// Indexed stream, 10MB input, 4K blocks
 func BenchmarkReader4K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
@@ -417,6 +419,7 @@ func BenchmarkReader4K(t *testing.B) {
 	}
 }
 
+// Indexed stream, 10MB input, 1K blocks
 func BenchmarkReader1K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
@@ -466,6 +469,165 @@ func BenchmarkReader1K(t *testing.B) {
 		}
 		if n != int64(len(b)) {
 			t.Fatal("read was short, expected", len(b), "was", n)
+		}
+		err = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Stream, 64K blocks on 10MB data.
+func BenchmarkReaderStream64K(t *testing.B) {
+	data := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewStreamWriter(data, dedup.ModeFixed, size, 100*size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alldata := data.Bytes()
+
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		input := bytes.NewBuffer(alldata)
+		r, err := dedup.NewStreamReader(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := io.Copy(ioutil.Discard, r)
+		if err != io.EOF && err != nil {
+			t.Fatal(err)
+		}
+		if len(b) != int(n) {
+			t.Fatalf("Expected len %d, got %d", len(b), n)
+		}
+		err = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Stream, 4K blocks on 10MB data.
+func BenchmarkReaderStream4K(t *testing.B) {
+	data := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 4 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 100; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewStreamWriter(data, dedup.ModeFixed, size, 100*size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alldata := data.Bytes()
+
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		input := bytes.NewBuffer(alldata)
+		r, err := dedup.NewStreamReader(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := io.Copy(ioutil.Discard, r)
+		if err != io.EOF && err != nil {
+			t.Fatal(err)
+		}
+		if len(b) != int(n) {
+			t.Fatalf("Expected len %d, got %d", len(b), n)
+		}
+		err = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Stream, 1K blocks on 10MB data.
+func BenchmarkReaderStream1K(t *testing.B) {
+	data := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 1 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 500; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewStreamWriter(data, dedup.ModeFixed, size, 100*size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alldata := data.Bytes()
+
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		input := bytes.NewBuffer(alldata)
+		r, err := dedup.NewStreamReader(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := io.Copy(ioutil.Discard, r)
+		if err != io.EOF && err != nil {
+			t.Fatal(err)
+		}
+		if len(b) != int(n) {
+			t.Fatalf("Expected len %d, got %d", len(b), n)
 		}
 		err = r.Close()
 		if err != nil {
