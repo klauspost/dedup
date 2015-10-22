@@ -239,6 +239,8 @@ func TestDynamicRoundtrip(t *testing.T) {
 	}
 }
 
+//TODO: Test WriteTo
+
 func BenchmarkReader64K(t *testing.B) {
 	idx := &bytes.Buffer{}
 	data := &bytes.Buffer{}
@@ -261,7 +263,10 @@ func BenchmarkReader64K(t *testing.B) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(w, input)
+	_, err = io.Copy(w, input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -280,13 +285,13 @@ func BenchmarkReader64K(t *testing.B) {
 			t.Fatal(err)
 		}
 		n, err := io.Copy(ioutil.Discard, r)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			t.Fatal(err)
 		}
 		if n != int64(len(b)) {
-			t.Fatal("read was short")
+			t.Fatal("read was short, expected", len(b), "was", n)
 		}
-		err = w.Close()
+		err = r.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -315,7 +320,10 @@ func BenchmarkReader4K(t *testing.B) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(w, input)
+	_, err = io.Copy(w, input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -327,20 +335,77 @@ func BenchmarkReader4K(t *testing.B) {
 	t.ResetTimer()
 	t.SetBytes(totalinput)
 	for i := 0; i < t.N; i++ {
-		idx = bytes.NewBuffer(index)
-		data = bytes.NewBuffer(alldata)
+		idx := bytes.NewBuffer(index)
+		data := bytes.NewBuffer(alldata)
 		r, err := dedup.NewReader(idx, data)
 		if err != nil {
 			t.Fatal(err)
 		}
 		n, err := io.Copy(ioutil.Discard, r)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			t.Fatal(err)
 		}
 		if n != int64(len(b)) {
-			t.Fatal("read was short")
+			t.Fatal("read was short, expected", len(b), "was", n)
 		}
-		err = w.Close()
+		err = r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkReader1K(t *testing.B) {
+	idx := &bytes.Buffer{}
+	data := &bytes.Buffer{}
+
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 1 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 500; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, size, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(w, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	index := idx.Bytes()
+	alldata := data.Bytes()
+
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		idx := bytes.NewBuffer(index)
+		data := bytes.NewBuffer(alldata)
+		r, err := dedup.NewReader(idx, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := io.Copy(ioutil.Discard, r)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if n != int64(len(b)) {
+			t.Fatal("read was short, expected", len(b), "was", n)
+		}
+		err = r.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
