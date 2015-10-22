@@ -238,9 +238,9 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer,
 	}
 
 	w.close = streamClose
-	w.putUint64(2)                           // Format
-	w.putUint64(uint64(maxSize))             // Maximum block size
-	w.putUint64(uint64(maxMemory / maxSize)) // Maximum backreference length
+	w.putUint64(2)                   // Format
+	w.putUint64(uint64(maxSize))     // Maximum block size
+	w.putUint64(uint64(w.maxBlocks)) // Maximum backreference length
 
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {
@@ -484,7 +484,7 @@ func (w *writer) blockStreamWriter() {
 		// Purge old entries once in a while
 		if w.maxBlocks > 0 && b.N&65535 == 65535 {
 			for k, v := range w.index {
-				if (v - match) > w.maxBlocks {
+				if (b.N - v) > w.maxBlocks {
 					delete(w.index, k)
 				}
 			}
