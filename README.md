@@ -3,7 +3,7 @@ A Streaming Deduplication package for Go
 
 This package implements streaming deduplication, allowing you to remove duplicated data in streams. It implements variable block sizes and automatic content block adaptation. It has a fully streaming mode and an indexed mode, that has significantly reduced memory requirements.
 
-For an introduction to deduplication read this blog post [LINK WHEN READY: Fast Streaming Deduplication in Go](https://blog.klauspost.com).
+For an introduction to deduplication read this blog post [Fast Stream Deduplication in Go](https://blog.klauspost.com/fast-stream-deduplication-in-go/).
 
 Package home: https://github.com/klauspost/dedup
 
