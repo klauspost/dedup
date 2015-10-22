@@ -492,7 +492,7 @@ func ExampleNewStreamWriter() {
 	// Data size: 1067
 }
 
-// Shows an example of a birthday problem calculation.
+// This shows an example of a birthday problem calculation.
 // We calculate the probability of a collision of SHA1 hashes
 // on 1 Terabyte data, using 1 Kilobyte blocks.
 // With SHA-1, that gives a 1 in 2535301202817642046627252275200 chance
