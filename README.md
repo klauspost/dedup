@@ -23,7 +23,7 @@ go get -u github.com/klauspost/dedup
 
 # Usage
 
-If you haven't already, you should read the [LINK WHEN READY: Fast Streaming Deduplication in Go](https://blog.klauspost.com) blog post, since it will introduce different aspects and help you make choices for your setup.
+If you haven't already, you should read the [Fast Stream Deduplication in Go](https://blog.klauspost.com/fast-stream-deduplication-in-go/) blog post, since it will introduce different aspects and help you make choices for your setup.
 
 There are two symmetric functions [`NewWriter`](https://godoc.org/github.com/klauspost/dedup#NewWriter)/[`NewReader`](https://godoc.org/github.com/klauspost/dedup#NewReader) and [`NewStreamWriter`](https://godoc.org/github.com/klauspost/dedup#NewStreamWriter)/[`NewStreamReader`](https://godoc.org/github.com/klauspost/dedup#NewStreamReader)`. The first pair creates an *indexed* stream, which will write the index and data to two separate streams. This allows to decode the deduplicated stream with much less memory. The second pair will write all data to a *single stream*. This allows for on-the-fly transfers, but will require more memory in the receiving end.
 
