@@ -540,30 +540,6 @@ func (f *fixedWriter) split(w *writer) {
 	w.off = 0
 }
 
-// Returns an approximate Birthday probability calculation
-// based on the number of blocks given and the hash size.
-//
-// It uses the simplified calculation:  p = k(k-1) / (2N)
-//
-// From http://preshing.com/20110504/hash-collision-probabilities/
-func BirthdayProblem(blocks int) string {
-	k := big.NewInt(int64(blocks))
-	km1 := big.NewInt(int64(blocks - 1))
-	ksq := k.Mul(k, km1)
-	n := big.NewInt(0)
-	n = n.Exp(big.NewInt(2), big.NewInt(int64(hasher.Size)*8), nil)
-	twoN := n.Add(n, n)
-	var t, t2 big.Rat
-	var res *big.Rat
-	//
-	res = t.SetFrac(ksq, twoN)
-	f64, _ := res.Float64()
-	inv := t2.Inv(res).FloatString(0)
-	invs := fmt.Sprintf(" ~ 1/%s ~ %v", inv, f64)
-
-	return "Collision probability is" + invs
-}
-
 // MemUse returns an approximate maximum memory use in bytes for
 // encoder (Writer) and decoder (Reader) for the given number of bytes.
 func (w *writer) MemUse(bytes int) (encoder, decoder int64) {
