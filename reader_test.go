@@ -639,7 +639,7 @@ func BenchmarkReaderStream1K(t *testing.B) {
 }
 
 // This will deduplicate a buffer of zeros to an indexed stream
-func ExampleReader() {
+func ExampleNewReader() {
 	// Create data we can read.
 	var idx, data bytes.Buffer
 	input := bytes.NewBuffer(make([]byte, 50000))
@@ -673,7 +673,7 @@ func ExampleReader() {
 }
 
 // This will deduplicate a buffer of zeros to an indexed stream
-func ExampleStreamReader() {
+func ExampleNewStreamReader() {
 	// Create data we can read.
 	var data bytes.Buffer
 	input := bytes.NewBuffer(make([]byte, 50000))

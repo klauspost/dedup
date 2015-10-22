@@ -429,7 +429,7 @@ func TestBirthdayProblem(t *testing.T) {
 }
 
 // This will deduplicate a buffer of zeros to an indexed stream
-func ExampleWriter() {
+func ExampleNewWriter() {
 	// We will write to these
 	idx := bytes.Buffer{}
 	data := bytes.Buffer{}
@@ -462,7 +462,7 @@ func ExampleWriter() {
 }
 
 // This will deduplicate a buffer of zeros to an non-indexed stream
-func ExampleStreamWriter() {
+func ExampleNewStreamWriter() {
 	// We will write to this
 	data := bytes.Buffer{}
 
