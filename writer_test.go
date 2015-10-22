@@ -491,3 +491,17 @@ func ExampleNewStreamWriter() {
 	// OUTPUT: Blocks: 50
 	// Data size: 1067
 }
+
+// Shows an example of a birthday problem calculation.
+// We calculate the probability of a collision of SHA1 hashes
+// on 1 Terabyte data, using 1 Kilobyte blocks.
+// With SHA-1, that gives a 1 in 2535301202817642046627252275200 chance
+// of a collision occurring.
+func ExampleBirthdayProblem() {
+	fmt.Println("Hash size is", dedup.HashSize*8, "bits")
+	fmt.Println("1TiB, 1KiB blocks:")
+	fmt.Println(dedup.BirthdayProblem((1 << 40) / (1 << 10)))
+	// Output: Hash size is 160 bits
+	// 1TiB, 1KiB blocks:
+	// Collision probability is ~ 1/2535301202817642046627252275200 ~ 3.944304522431639e-31
+}
