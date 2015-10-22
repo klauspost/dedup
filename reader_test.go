@@ -7,6 +7,8 @@ import (
 
 	"io/ioutil"
 
+	"fmt"
+
 	"github.com/klauspost/dedup"
 )
 
@@ -634,4 +636,74 @@ func BenchmarkReaderStream1K(t *testing.B) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// This will deduplicate a buffer of zeros to an indexed stream
+func ExampleReader() {
+	// Create data we can read.
+	var idx, data bytes.Buffer
+	input := bytes.NewBuffer(make([]byte, 50000))
+	w, _ := dedup.NewWriter(&idx, &data, dedup.ModeFixed, 1000, 0)
+	_, _ = io.Copy(w, input)
+	_ = w.Close()
+
+	r, err := dedup.NewReader(&idx, &data)
+	if err != nil {
+		panic(err)
+	}
+
+	// Inspect how much memory it will use.
+	fmt.Println("Memory use:", r.MaxMem())
+
+	var dst bytes.Buffer
+
+	// Read everything
+	_, err = io.Copy(&dst, r)
+	if err != nil && err != io.EOF {
+		panic(err)
+	}
+
+	// Let us inspect what was written:
+	fmt.Println("Returned data length:", dst.Len())
+	fmt.Println("Everything zero:", 0 == bytes.Compare(dst.Bytes(), make([]byte, 50000)))
+
+	// OUTPUT: Memory use: 1000
+	// Returned data length: 50000
+	// Everything zero: true
+}
+
+// This will deduplicate a buffer of zeros to an indexed stream
+func ExampleStreamReader() {
+	// Create data we can read.
+	var data bytes.Buffer
+	input := bytes.NewBuffer(make([]byte, 50000))
+	// Set the memory limit to 10000 bytes
+	w, _ := dedup.NewStreamWriter(&data, dedup.ModeFixed, 1000, 10000)
+	_, _ = io.Copy(w, input)
+	_ = w.Close()
+
+	r, err := dedup.NewStreamReader(&data)
+	if err != nil {
+		panic(err)
+	}
+
+	// Inspect how much memory it will use.
+	// Since this is a stream, it will print the worst possible scenario
+	fmt.Println("Memory use:", r.MaxMem())
+
+	var dst bytes.Buffer
+
+	// Read everything
+	_, err = io.Copy(&dst, r)
+	if err != nil && err != io.EOF {
+		panic(err)
+	}
+
+	// Let us inspect what was written:
+	fmt.Println("Returned data length:", dst.Len())
+	fmt.Println("Everything zero:", 0 == bytes.Compare(dst.Bytes(), make([]byte, 50000)))
+
+	// OUTPUT: Memory use: 10000
+	// Returned data length: 50000
+	// Everything zero: true
 }
