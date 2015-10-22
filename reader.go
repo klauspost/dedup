@@ -199,6 +199,14 @@ func (f *reader) readFormat1(idx io.ByteReader) error {
 			}
 			f.blocks = append(f.blocks, &rblock{readData: int(size - r), offset: foffset})
 			foffset += int64(size - r)
+			// Continuation should be 0
+			r, err = binary.ReadUvarint(idx)
+			if err != nil {
+				return err
+			}
+			if r != 0 {
+				return fmt.Errorf("invalid continuation, should be 0, was %d", r)
+			}
 			return nil
 		// Deduplicated block
 		default:
@@ -453,6 +461,17 @@ func (f *streamReader) streamReader(stream *bufio.Reader) {
 			blocks[i%f.maxLength] = b.data
 			return nil
 		}()
+		// Read continuation
+		if lastBlock {
+			r, err := binary.ReadUvarint(stream)
+			if err != nil {
+				b.err = err
+			}
+			if r != 0 {
+				b.err = fmt.Errorf("invalid continuation, should be 0, was %d", r)
+			}
+		}
+
 		// Send or close
 		select {
 		case <-f.closeReader:

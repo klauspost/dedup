@@ -305,6 +305,7 @@ func idxClose(w *writer) (err error) {
 	// Insert length of remaining data into index
 	w.putUint64(uint64(math.MaxUint64))
 	w.putUint64(uint64(w.maxSize - w.off))
+	w.putUint64(0) // Stream continuation possibility, should be 0.
 
 	buf := bytes.NewBuffer(w.cur[0:w.off])
 	n, err := io.Copy(w.blks, buf)
@@ -331,6 +332,7 @@ func streamClose(w *writer) (err error) {
 	if int(n) != w.off {
 		return errors.New("streamClose: r.cur short write")
 	}
+	w.putUint64(0) // Stream continuation possibility, should be 0.
 	return nil
 }
 

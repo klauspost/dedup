@@ -457,7 +457,7 @@ func ExampleNewWriter() {
 	fmt.Println("Data size:", data.Len())
 
 	// OUTPUT: Blocks: 50
-	// Index size: 66
+	// Index size: 67
 	// Data size: 1000
 }
 
@@ -489,7 +489,7 @@ func ExampleNewStreamWriter() {
 	fmt.Println("Data size:", data.Len())
 
 	// OUTPUT: Blocks: 50
-	// Data size: 1067
+	// Data size: 1068
 }
 
 // This shows an example of a birthday problem calculation.
