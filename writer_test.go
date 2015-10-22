@@ -1,6 +1,7 @@
 package dedup_test
 
 import (
+	"fmt"
 	"testing"
 
 	"bytes"
@@ -394,7 +395,7 @@ func BenchmarkFixedStreamWriter4K(t *testing.B) {
 	}
 }
 
-// This doesn't actually test anything, but prints probabilites to log
+// This doesn't actually test anything, but prints probabilities to log
 func TestBirthdayProblem(t *testing.T) {
 	t.Log("Hash size is", dedup.HashSize*8, "bits")
 	t.Log("1GiB, 1KiB blocks:")
@@ -425,4 +426,68 @@ func TestBirthdayProblem(t *testing.T) {
 	w, _ = dedup.NewWriter(ioutil.Discard, ioutil.Discard, dedup.ModeFixed, 1<<10, 0)
 	e, _ = w.MemUse(1 << 60)
 	t.Logf("It will use %d MiB for encoder.", e>>20)
+}
+
+// This will deduplicate a buffer of zeros to an indexed stream
+func ExampleWriter() {
+	// We will write to these
+	idx := bytes.Buffer{}
+	data := bytes.Buffer{}
+
+	// This is our input:
+	input := bytes.NewBuffer(make([]byte, 50000))
+
+	// Create a new writer, with each block being 1000 bytes
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, 1000, 0)
+	if err != nil {
+		panic(err)
+	}
+	// Copy our input to the writer.
+	io.Copy(w, input)
+
+	// Close the writer
+	err = w.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	// Let us inspect what was written:
+	fmt.Println("Blocks:", w.Blocks())
+	fmt.Println("Index size:", idx.Len())
+	fmt.Println("Data size:", data.Len())
+
+	// OUTPUT: Blocks: 50
+	// Index size: 66
+	// Data size: 1000
+}
+
+// This will deduplicate a buffer of zeros to an non-indexed stream
+func ExampleStreamWriter() {
+	// We will write to this
+	data := bytes.Buffer{}
+
+	// This is our input:
+	input := bytes.NewBuffer(make([]byte, 50000))
+
+	// Create a new writer, with each block being 1000 bytes,
+	// And allow it to use 10000 bytes of memory
+	w, err := dedup.NewStreamWriter(&data, dedup.ModeFixed, 1000, 10000)
+	if err != nil {
+		panic(err)
+	}
+	// Copy our input to the writer.
+	io.Copy(w, input)
+
+	// Close the writer
+	err = w.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	// Let us inspect what was written:
+	fmt.Println("Blocks:", w.Blocks())
+	fmt.Println("Data size:", data.Len())
+
+	// OUTPUT: Blocks: 50
+	// Data size: 1067
 }
