@@ -647,6 +647,7 @@ func ExampleNewReader() {
 	_, _ = io.Copy(w, input)
 	_ = w.Close()
 
+	// Create a new reader.
 	r, err := dedup.NewReader(&idx, &data)
 	if err != nil {
 		panic(err)
@@ -682,6 +683,7 @@ func ExampleNewStreamReader() {
 	_, _ = io.Copy(w, input)
 	_ = w.Close()
 
+	// Create a new stream reader:
 	r, err := dedup.NewStreamReader(&data)
 	if err != nil {
 		panic(err)
