@@ -420,6 +420,10 @@ func (f *streamReader) streamReader(stream *bufio.Reader) {
 					return err
 				}
 				size := f.size - int(s)
+				if offset == math.MaxUint64 && size == 0 {
+					lastBlock = true
+					return nil
+				}
 				if size > f.size || size <= 0 {
 					return fmt.Errorf("invalid size encountered at block %d, size was %d", i, size)
 				}
