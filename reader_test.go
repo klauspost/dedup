@@ -239,7 +239,69 @@ func TestDynamicRoundtrip(t *testing.T) {
 	}
 }
 
-//TODO: Test WriteTo
+func TestReaderWriteTo(t *testing.T) {
+	idx := bytes.Buffer{}
+	data := bytes.Buffer{}
+
+	const totalinput = 10<<20 + 65
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewWriter(&idx, &data, dedup.ModeFixed, size, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := dedup.NewReader(&idx, &data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := &bytes.Buffer{}
+	n, err := r.WriteTo(dst)
+	if err != io.EOF && err != nil {
+		t.Fatal(err)
+	}
+	if len(b) != int(n) {
+		t.Errorf("Write count, expected n %d, got %d", len(b), n)
+	}
+
+	out := dst.Bytes()
+	if len(b) != len(out) {
+		t.Fatalf("Expected len %d, got %d", len(b), len(out))
+	}
+	if len(b) != len(out) {
+		t.Fatalf("Expected len %d, got %d", len(b), len(out))
+	}
+	if bytes.Compare(b, out) != 0 {
+		t.Fatal("Output mismatch")
+	}
+	err = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := r.BlockSizes()
+	for _, s := range blocks[:len(blocks)-1] {
+		if s != size {
+			t.Fatal("wrong size, expected", size, "got", s)
+		}
+	}
+}
 
 func BenchmarkReader64K(t *testing.B) {
 	idx := &bytes.Buffer{}
