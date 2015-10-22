@@ -275,7 +275,6 @@ func (f *streamReader) Read(b []byte) (int, error) {
 func (f *streamReader) WriteTo(w io.Writer) (int64, error) {
 	written := int64(0)
 	for {
-		f.curBlock++
 		next, ok := <-f.ready
 		if !ok {
 			return written, io.EOF
@@ -283,6 +282,9 @@ func (f *streamReader) WriteTo(w io.Writer) (int64, error) {
 		if next.err != nil {
 			return written, next.err
 		}
+		f.curBlock++
+		f.curData = next.data
+
 		// We don't want to keep it, if this is the last block
 		if f.curBlock == next.last {
 			next.data = nil
