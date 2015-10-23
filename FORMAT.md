@@ -1,5 +1,17 @@
 # Stream formats
 
+The streaming format is designed to be easy and fast to write or parse.
+
+It only uses 64 bit unsigned variable sized ints to store the information.  
+
+The encoding of Uvarint is:
+
+* unsigned integers are serialized 7 bits at a time, starting with the least significant bits
+* the most significant bit (msb) in each output byte indicates if there is a continuation byte (msb = 1)
+
+All values in this format can fit in a 64 bit unsigned value. 
+See [encoding/binary.ReadUvarint](https://golang.org/pkg/encoding/binary/#ReadUvarint) for a reference implementation.
+
 # Format 1
 This format has data and index split in two files, so the index can be quickly read before any decoding starts.
 
