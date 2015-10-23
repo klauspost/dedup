@@ -189,6 +189,9 @@ func (f *reader) readFormat1(idx io.ByteReader) error {
 			if err != nil {
 				return err
 			}
+			if r > size {
+				return fmt.Errorf("invalid size for block %d, %d > %d", i, r, size)
+			}
 			f.blocks = append(f.blocks, &rblock{first: i, last: i, readData: int(size - r), offset: foffset})
 			foffset += int64(size - r)
 		// Last block
