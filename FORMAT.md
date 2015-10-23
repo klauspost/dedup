@@ -80,7 +80,7 @@ Maximum backreference Length, helping the decoder to deallocate blocks.
 |----------------|---------|--------------|
 | Format ID      | UvarInt | 0x2 (always) |
 | MaxBlockSize | UvarInt |  >= 512       |
-| MaxLength | UvarInt |  > 1       |
+| MaxLength | UvarInt |  >= 1       |
 
 In addition to Maximum Block Size, a `MaxLength` is also added, which indicates the maximum backreference distance 
 of this stream. This means that any offsets will be less or equal to MaxLength.
