@@ -13,7 +13,6 @@
 package dedup
 
 import (
-	hasher "crypto/sha1"
 	"fmt"
 	"math/big"
 )
@@ -29,7 +28,7 @@ func BirthdayProblem(blocks int) string {
 	km1 := big.NewInt(int64(blocks - 1))
 	ksq := k.Mul(k, km1)
 	n := big.NewInt(0)
-	n = n.Exp(big.NewInt(2), big.NewInt(int64(hasher.Size)*8), nil)
+	n = n.Exp(big.NewInt(2), big.NewInt(int64(HashSize)*8), nil)
 	twoN := n.Add(n, n)
 	var t, t2 big.Rat
 	var res *big.Rat
