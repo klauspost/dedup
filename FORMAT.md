@@ -22,7 +22,7 @@ This index allows to keep track of the last occurence of a block, so it can be d
 | Content        | Type    | Values       |
 |----------------|---------|--------------|
 | Format ID      | UvarInt | 0x1 (always) |
-| MaxBlockSize | UvarInt |  > 512       |
+| MaxBlockSize | UvarInt |  >= 512       |
 
 ## Repeat Blocks
 
@@ -79,7 +79,7 @@ Maximum backreference Length, helping the decoder to deallocate blocks.
 | Content        | Type    | Values       |
 |----------------|---------|--------------|
 | Format ID      | UvarInt | 0x2 (always) |
-| MaxBlockSize | UvarInt |  > 512       |
+| MaxBlockSize | UvarInt |  >= 512       |
 | MaxLength | UvarInt |  > 1       |
 
 In addition to Maximum Block Size, a `MaxLength` is also added, which indicates the maximum backreference distance 
