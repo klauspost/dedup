@@ -441,6 +441,7 @@ func ExampleNewWriter() {
 	if err != nil {
 		panic(err)
 	}
+
 	// Copy our input to the writer.
 	io.Copy(w, input)
 
@@ -535,6 +536,7 @@ func ExampleNewWriter_file() {
 	// Copy our input to the writer.
 	io.Copy(w, input)
 
+	// Print the number of blocks written
 	fmt.Println("Blocks:", w.Blocks())
 
 	// OUTPUT: Blocks: 500
@@ -562,6 +564,7 @@ func ExampleNewStreamWriter_file() {
 
 	// This is our input:
 	input := bytes.NewBuffer(make([]byte, 500000))
+
 	// Create a new writer, with each block being 1000 bytes,
 	// And allow it to use 10000 bytes of memory
 	w, err := dedup.NewStreamWriter(data, dedup.ModeFixed, 1000, 10000)
@@ -569,9 +572,11 @@ func ExampleNewStreamWriter_file() {
 		panic(err)
 	}
 	defer w.Close()
+
 	// Copy our input to the writer.
 	io.Copy(w, input)
 
+	// Print the number of blocks written
 	fmt.Println("Blocks:", w.Blocks())
 
 	// OUTPUT: Blocks: 500
