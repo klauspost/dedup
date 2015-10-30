@@ -1,14 +1,13 @@
 package dedup_test
 
 import (
-	"fmt"
-	"testing"
-
 	"bytes"
+	"fmt"
 	"io"
-	"math/rand"
-
 	"io/ioutil"
+	"math/rand"
+	"os"
+	"testing"
 
 	"github.com/klauspost/dedup"
 )
@@ -490,6 +489,93 @@ func ExampleNewStreamWriter() {
 
 	// OUTPUT: Blocks: 50
 	// Data size: 1068
+}
+
+// This example will show how to write data to two files.
+// Running this example will deduplicate an empty byte slice
+// of 500000 bytes into an 'output.data' and 'output.idx' file.
+//
+// In the real world, you would likely want to add a bufio.NewWriter
+// to the output, but to keep it simple, we don't do that here.
+func ExampleNewWriter_file() {
+	data, err := os.Create("output.data")
+	if err != nil {
+		panic(err)
+	}
+	// Close, print stats and remove it
+	defer func() {
+		data.Close()
+		stat, _ := os.Stat("output.data")
+		fmt.Println("Data size:", stat.Size())
+		os.Remove("output.data")
+	}()
+
+	idx, err := os.Create("output.idx")
+	if err != nil {
+		panic(err)
+	}
+	// Close, print stats and remove it
+	defer func() {
+		idx.Close()
+		stat, _ := os.Stat("output.idx")
+		fmt.Println("Index size:", stat.Size())
+		os.Remove("output.idx")
+	}()
+
+	// This is our input:
+	input := bytes.NewBuffer(make([]byte, 500000))
+
+	// Create a new writer, with each block being 1000 bytes fixed size.
+	w, err := dedup.NewWriter(idx, data, dedup.ModeFixed, 1000, 0)
+	if err != nil {
+		panic(err)
+	}
+	defer w.Close()
+
+	// Copy our input to the writer.
+	io.Copy(w, input)
+
+	fmt.Println("Blocks:", w.Blocks())
+
+	// OUTPUT: Blocks: 500
+	// Index size: 517
+	// Data size: 1000
+}
+
+// This will deduplicate a buffer of zeros to an non-indexed stream
+// written to a file.
+// It is not recommended to use a single stream when you are writing to
+// a stream.
+func ExampleNewStreamWriter_file() {
+	// We will write to this
+	data, err := os.Create("outputstream.data")
+	if err != nil {
+		panic(err)
+	}
+	// Close, print stats and remove it
+	defer func() {
+		data.Close()
+		stat, _ := os.Stat("outputstream.data")
+		fmt.Println("Stream size:", stat.Size())
+		os.Remove("outputstream.data")
+	}()
+
+	// This is our input:
+	input := bytes.NewBuffer(make([]byte, 500000))
+	// Create a new writer, with each block being 1000 bytes,
+	// And allow it to use 10000 bytes of memory
+	w, err := dedup.NewStreamWriter(data, dedup.ModeFixed, 1000, 10000)
+	if err != nil {
+		panic(err)
+	}
+	defer w.Close()
+	// Copy our input to the writer.
+	io.Copy(w, input)
+
+	fmt.Println("Blocks:", w.Blocks())
+
+	// OUTPUT: Blocks: 500
+	// Stream size: 1518
 }
 
 // This shows an example of a birthday problem calculation.
