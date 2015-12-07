@@ -300,10 +300,6 @@ func NewSplitter(fragments chan<- Fragment, mode Mode, maxSize uint) (Writer, er
 		return nil, ErrSizeTooSmall
 	}
 
-	w.close = idxClose
-	w.putUint64(1)               // Format
-	w.putUint64(uint64(maxSize)) // Maximum block size
-
 	// Start one goroutine per core
 	for i := 0; i < ncpu; i++ {
 		go w.hasher()
