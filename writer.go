@@ -61,9 +61,19 @@ const (
 	ModeDynamic = 1
 )
 
+// Fragment is a file fragment.
+// It is the data returned by the NewSplitter.
+type Fragment struct {
+	Hash    [HashSize]byte // Hash of the fragment
+	Payload []byte         // Data of the fragment.
+	New     bool           // Will be true, if the data hasn't been encountered before.
+	N       uint           // Sequencially incrementing number for each segment.
+}
+
 type writer struct {
 	blks      io.Writer                          // Block data writer
 	idx       io.Writer                          // Index writer
+	frags     chan<- Fragment                    // Fragment output
 	maxSize   int                                // Maximum Block size
 	maxBlocks int                                // Maximum backreference distance
 	index     map[[hasher.Size]byte]int          // Known hashes and their index
@@ -251,6 +261,69 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer,
 		w.buffers <- &block{data: make([]byte, maxSize), hashDone: make(chan error, 1)}
 	}
 	go w.blockStreamWriter()
+	return w, nil
+}
+
+// NewSplitter will return a writer you can write data to,
+// and the file will be split into separate fragments.
+//
+// You must supply a fragment channel, that will output fragments for
+// the data you have written. The channel must accept data while you
+// write to the spliter.
+//
+// For each fragment the SHA-1 hash of the data section is returned,
+// along with the raw data of this segment.
+//
+// When you call Close on the returned Writer, the final fragments
+// will be sent and the channel will be closed.
+func NewSplitter(fragments chan<- Fragment, mode Mode, maxSize uint) (Writer, error) {
+	ncpu := runtime.GOMAXPROCS(0)
+	// For small block sizes we need to keep a pretty big buffer to keep input fed.
+	// Constant below appears to be sweet spot measured with 4K blocks.
+	var bufmul = 256 << 10 / int(maxSize)
+	if bufmul < 2 {
+		bufmul = 2
+	}
+
+	w := &writer{
+		frags:   fragments,
+		maxSize: int(maxSize),
+		index:   make(map[[hasher.Size]byte]int),
+		input:   make(chan *block, ncpu*bufmul),
+		write:   make(chan *block, ncpu*bufmul),
+		exited:  make(chan struct{}, 0),
+		cur:     make([]byte, maxSize),
+		vari64:  make([]byte, binary.MaxVarintLen64),
+		buffers: make(chan *block, ncpu*bufmul),
+		nblocks: 1,
+	}
+
+	switch mode {
+	case ModeFixed:
+		fw := &fixedWriter{}
+		w.writer = fw.write
+		w.split = fw.split
+	case ModeDynamic:
+		zw := newZpaqWriter(maxSize)
+		w.writer = zw.write
+		w.split = zw.split
+	default:
+		return nil, fmt.Errorf("dedup: unknown mode")
+	}
+
+	if w.maxSize < MinBlockSize {
+		return nil, ErrSizeTooSmall
+	}
+
+	// Start one goroutine per core
+	for i := 0; i < ncpu; i++ {
+		go w.hasher()
+	}
+	// Insert the buffers we will use
+	for i := 0; i < ncpu*bufmul; i++ {
+		w.buffers <- &block{data: make([]byte, maxSize), hashDone: make(chan error, 1)}
+	}
+	go w.fragmentWriter()
 	return w, nil
 }
 
@@ -491,6 +564,31 @@ func (w *writer) blockStreamWriter() {
 		}
 		// Done, reinsert buffer
 		w.buffers <- b
+	}
+}
+
+// fragmentWriter will write hashed blocks to the output channel
+// and recycle the buffers.
+func (w *writer) fragmentWriter() {
+	defer close(w.exited)
+	defer close(w.frags)
+	n := uint(0)
+	for b := range w.write {
+		_ = <-b.hashDone
+		var f Fragment
+		f.N = n
+		copy(f.Hash[:], b.sha1Hash[:])
+		_, ok := w.index[b.sha1Hash]
+		f.Payload = make([]byte, len(b.data))
+		copy(f.Payload, b.data)
+		if !ok {
+			w.index[b.sha1Hash] = 0
+			f.New = !ok
+		}
+		w.frags <- f
+		// Done, reinsert buffer
+		w.buffers <- b
+		n++
 	}
 }
 

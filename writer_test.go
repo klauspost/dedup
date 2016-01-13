@@ -2,11 +2,13 @@ package dedup_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/klauspost/dedup"
@@ -115,6 +117,55 @@ func TestFixedWriterLimit(t *testing.T) {
 	}
 	t.Log("Maximum estimated use:", r.MaxMem(), "bytes,", useBlocks, "blocks")
 	r.Close()
+}
+
+func TestFixedFragment(t *testing.T) {
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	out := make(chan dedup.Fragment, 10)
+	count := make(chan int, 0)
+	go func() {
+		n := 0
+		for f := range out {
+			if f.New {
+				n += len(f.Payload)
+			}
+		}
+		count <- n
+	}()
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewSplitter(out, dedup.ModeFixed, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	datalen := <-count
+	removed := ((totalinput) - datalen) / size
+
+	t.Log("Data size:", datalen)
+	t.Log("Removed", removed, "blocks")
+	// We should get at least 50 blocks
+	if removed < 50 {
+		t.Fatal("didn't remove at least 50 blocks")
+	}
+	if removed > 60 {
+		t.Fatal("removed unreasonable high amount of blocks")
+	}
 }
 
 func TestDynamicWriter(t *testing.T) {
@@ -339,6 +390,39 @@ func BenchmarkDynamicWriter64K(t *testing.B) {
 	}
 }
 
+// Maximum block size:64k
+func BenchmarkDynamicFragments64K(t *testing.B) {
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	t.ResetTimer()
+	t.SetBytes(totalinput)
+	for i := 0; i < t.N; i++ {
+		out := make(chan dedup.Fragment, 10)
+		go func() {
+			for _ = range out {
+			}
+		}()
+		input = bytes.NewBuffer(b)
+		w, _ := dedup.NewSplitter(out, dedup.ModeDynamic, size)
+		io.Copy(w, input)
+		err := w.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // Maximum block size:4k
 func BenchmarkDynamicWriter4K(t *testing.B) {
 	const totalinput = 10 << 20
@@ -490,6 +574,112 @@ func ExampleNewStreamWriter() {
 
 	// OUTPUT: Blocks: 50
 	// Data size: 1068
+}
+
+// This will deduplicate a buffer of zeros,
+// and return each block on a channel in order.
+func ExampleNewSplitter() {
+	// We will write to this
+	// We set a small buffer
+	out := make(chan dedup.Fragment, 10)
+
+	// This will consume our blocks as they are returned
+	// and send information about what was received.
+	info := make(chan int, 0)
+	go func() {
+		n := 0
+		size := 0
+		for f := range out {
+			n++
+			if f.New {
+				size += len(f.Payload)
+			}
+		}
+		info <- n
+		info <- size
+	}()
+
+	// This is our input:
+	input := bytes.NewBuffer(make([]byte, 50000))
+
+	// Create a new writer, with each block being 1000 bytes,
+	w, err := dedup.NewSplitter(out, dedup.ModeFixed, 1000)
+	if err != nil {
+		panic(err)
+	}
+	// Copy our input to the writer.
+	io.Copy(w, input)
+
+	// Close the writer
+	err = w.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	// Let us inspect what was written:
+	fmt.Println("Blocks:", <-info)
+	fmt.Println("Data size:", <-info)
+
+	// OUTPUT: Blocks: 50
+	// Data size: 1000
+}
+
+// This will deduplicate a file
+// and return each block on a channel in order.
+func ExampleNewSplitter_file() {
+	// Our input
+	f, _ := os.Open("testdata/sampledata.zip")
+	defer f.Close()
+
+	// We will receive fragments on this channel
+	ch := make(chan dedup.Fragment, 10)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Start a goroutine that will consume the fragments
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case f, ok := <-ch:
+				if !ok {
+					return
+				}
+				if f.New {
+					fmt.Printf("Got NEW fragment #%d, size %d, hash:%s\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]))
+					// Insert payload into data store
+				} else {
+					fmt.Printf("Got OLD fragment #%d, size %d, hash:%s\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]))
+				}
+				// Add hash to list of hashes required to reconstruct the file.
+			}
+		}
+	}()
+
+	// Create a dynamic splitter with average size of 1024 bytes.
+	w, _ := dedup.NewSplitter(ch, dedup.ModeDynamic, 4*1024)
+
+	// Copy data to the splitter
+	_, _ = io.Copy(w, f)
+
+	// Flush the remaining fragments
+	_ = w.Close()
+
+	// Wait for input to be received.
+	wg.Wait()
+
+	// OUTPUT:
+	// Got NEW fragment #0, size 893, hash:7f8455127e82f90ea7e97716ccaefa9317279b4b
+	// Got NEW fragment #1, size 559, hash:b554708bbfda24f1eb8fcd75a155d23bd36939d3
+	// Got NEW fragment #2, size 3482, hash:59bca870477e14e97ae8650e74ef52abcb6340e8
+	// Got NEW fragment #3, size 165, hash:6fb05a63e28a1bb2e880e051940f517115e7b16c
+	// Got NEW fragment #4, size 852, hash:6671826ffff6edd32951a0e774efccb5101ba629
+	// Got NEW fragment #5, size 3759, hash:0fae545a20195720d8e9bb9540069418d7db0873
+	// Got OLD fragment #6, size 3482, hash:59bca870477e14e97ae8650e74ef52abcb6340e8
+	// Got OLD fragment #7, size 165, hash:6fb05a63e28a1bb2e880e051940f517115e7b16c
+	// Got OLD fragment #8, size 852, hash:6671826ffff6edd32951a0e774efccb5101ba629
+	// Got NEW fragment #9, size 2380, hash:1507aa13e215517ce982b9235a0221018128ed4e
 }
 
 // This example will show how to write data to two files.

@@ -9,7 +9,7 @@ import (
 	"math"
 )
 
-// A reader will decode a deduplicated stream and
+// A Reader will decode a deduplicated stream and
 // return the data as it was encoded.
 // Use Close when done to release resources.
 type Reader interface {
@@ -284,7 +284,7 @@ func (f *streamReader) Read(b []byte) (int, error) {
 }
 
 // WriteTo writes data to w until there's no more data to write or when an error occurs.
-//The return value n is the number of bytes written.
+// The return value n is the number of bytes written.
 // Any error encountered during the write is also returned.
 func (f *streamReader) WriteTo(w io.Writer) (int64, error) {
 	written := int64(0)
