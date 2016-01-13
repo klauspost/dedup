@@ -90,6 +90,16 @@ func main() {
 
 Note that there is no error resilience built in. If any data is corrupted in any way, it will probably not be detected, and there is no way to recover corrupted data. So if you are in an environment where that could occur, you should add additional checks to ensure that data is recoverable.
 
+## Input Splitting
+
+If you want to simply split the input, that functionality is also exposed.
+
+This can be useful in the case that you want to deduplicate to a your own key-value store. 
+In this case, you simply feed the input to a *NewSplitter*. 
+This will return the individual fragments along with a hash. This will allow you to store your files as a stream of hashes, and separate the data into your data store.
+
+See the examples attached to the [NewSplitter](https://godoc.org/github.com/klauspost/dedup#example-NewSplitter) function on how to use this.
+
 ## Hash collisions
 
 The encoder uses SHA-1 to identify and "remember" unique blocks. No hash is secure from collisions, but SHA-1 offers 160 bits of entropy. 

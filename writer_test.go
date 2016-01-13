@@ -2,11 +2,13 @@ package dedup_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/klauspost/dedup"
@@ -616,6 +618,56 @@ func ExampleNewSplitter() {
 
 	// OUTPUT: Blocks: 50
 	// Data size: 1000
+}
+
+// This will deduplicate a file
+// and return each block on a channel in order.
+func ExampleNewSplitter_file() {
+	// Our input
+	f, _ := os.Open("LICENSE")
+	defer f.Close()
+
+	// We will receive fragments on this channel
+	ch := make(chan dedup.Fragment, 10)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Start a goroutine that will consume the fragments
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case f, ok := <-ch:
+				if !ok {
+					return
+				}
+				fmt.Printf("Got fragment #%d, size %d, hash:%s, new:%t\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]), f.New)
+				if f.New {
+					// Insert payload into data store
+				}
+				// Add hash to list of hashes required to reconstruct the file.
+			}
+		}
+	}()
+
+	// Create a dynamic splitter with average size of 256 bytes.
+	w, _ := dedup.NewSplitter(ch, dedup.ModeDynamic, 4*256)
+
+	// Copy data to the splitter
+	_, _ = io.Copy(w, f)
+
+	// Flush the remaining fragments
+	_ = w.Close()
+
+	// Wait for input to be received.
+	wg.Wait()
+	// OUTPUT:
+	// Got fragment #0, size 63, hash:e94cca23fbbec2018d254f653d610f33e5cf6991, new:true
+	// Got fragment #1, size 174, hash:2aa31f8fce1f2b2b39fe15306b9f9d63c19a3857, new:true
+	// Got fragment #2, size 364, hash:d47786c5918a1aa13d9a07768a18cb2aade6261d, new:true
+	// Got fragment #3, size 100, hash:8d7885317178fc20956f6f66e45dd7a1c5d4b931, new:true
+	// Got fragment #4, size 213, hash:0165c7b3e663366b15f53dcbec284f749f799c9f, new:true
 }
 
 // This example will show how to write data to two files.
