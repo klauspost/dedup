@@ -38,7 +38,7 @@ import (
   "bytes"
   "fmt"
   "io"
-  
+
   "github.com/klauspost/dedup"
 )
 
@@ -58,7 +58,7 @@ func main() {
 	}
 	// Copy our input to the writer.
 	io.Copy(w, input)
-	
+
 	// Close to flush the remaining buffers
 	err = w.Close()
 	if err != nil {
@@ -94,15 +94,16 @@ Note that there is no error resilience built in. If any data is corrupted in any
 
 If you want to simply split the input, that functionality is also exposed.
 
-This can be useful in the case that you want to deduplicate to a your own key-value store. 
-In this case, you simply feed the input to a *NewSplitter*. 
-This will return the individual fragments along with a hash. This will allow you to store your files as a stream of hashes, and separate the data into your data store.
+This can be useful in the case that you want to deduplicate to a your own key-value store.
+In this case, you simply feed the input to a *NewSplitter*.
+This will return the individual fragments along with a hash.
+This will allow you to store your files as a stream of hashes, and separate the data into your data store.
 
 See the examples attached to the [NewSplitter](https://godoc.org/github.com/klauspost/dedup#example-NewSplitter) function on how to use this.
 
 ## Hash collisions
 
-The encoder uses SHA-1 to identify and "remember" unique blocks. No hash is secure from collisions, but SHA-1 offers 160 bits of entropy. 
+The encoder uses SHA-1 to identify and "remember" unique blocks. No hash is secure from collisions, but SHA-1 offers 160 bits of entropy.
 
 For example, the chance of a random hash collision to occur when encoding 1 TB data in 1KB blocks is 3.94×10^-31 : 1, or one in "2.5 thousand billion billion billion". This of course assumes a uniform hash distribution and no deliberate hash collision attacks.
 
@@ -117,7 +118,7 @@ To help you calculate the birthday problem likelyhood with a given number of blo
 
 ## Why is this not compression?
 
-Deduplication does the same as compression but on a higher level. Instead of looking for small matches, it attempts to find the "bigger" matches. It will attempt to match and eliminate blocks where all content matches. 
+Deduplication does the same as compression but on a higher level. Instead of looking for small matches, it attempts to find the "bigger" matches. It will attempt to match and eliminate blocks where all content matches.
 
 This can be useful when backing up disk images or other content where you have duplicated files, etc.
 

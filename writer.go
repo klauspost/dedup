@@ -65,7 +65,7 @@ const (
 // It is the data returned by the NewSplitter.
 type Fragment struct {
 	Hash    [HashSize]byte // Hash of the fragment
-	Payload []byte         // Data of the fragment, will be nil if fragment isn't new.
+	Payload []byte         // Data of the fragment.
 	New     bool           // Will be true, if the data hasn't been encountered before.
 	N       uint           // Sequencially incrementing number for each segment.
 }
@@ -271,8 +271,8 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer,
 // the data you have written. The channel must accept data while you
 // write to the spliter.
 //
-// For each fragment the SHA-1 hash of the data section is returned.
-// For fragments that have not yet been found, the data is also returned.
+// For each fragment the SHA-1 hash of the data section is returned,
+// along with the raw data of this segment.
 //
 // When you call Close on the returned Writer, the final fragments
 // will be sent and the channel will be closed.
@@ -579,11 +579,11 @@ func (w *writer) fragmentWriter() {
 		f.N = n
 		copy(f.Hash[:], b.sha1Hash[:])
 		_, ok := w.index[b.sha1Hash]
+		f.Payload = make([]byte, len(b.data))
+		copy(f.Payload, b.data)
 		if !ok {
 			w.index[b.sha1Hash] = 0
 			f.New = !ok
-			f.Payload = make([]byte, len(b.data))
-			copy(f.Payload, b.data)
 		}
 		w.frags <- f
 		// Done, reinsert buffer

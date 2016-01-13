@@ -138,7 +138,9 @@ func TestFixedFragment(t *testing.T) {
 	go func() {
 		n := 0
 		for f := range out {
-			n += len(f.Payload)
+			if f.New {
+				n += len(f.Payload)
+			}
 		}
 		count <- n
 	}()
@@ -589,7 +591,9 @@ func ExampleNewSplitter() {
 		size := 0
 		for f := range out {
 			n++
-			size += len(f.Payload)
+			if f.New {
+				size += len(f.Payload)
+			}
 		}
 		info <- n
 		info <- size
@@ -624,7 +628,7 @@ func ExampleNewSplitter() {
 // and return each block on a channel in order.
 func ExampleNewSplitter_file() {
 	// Our input
-	f, _ := os.Open("LICENSE")
+	f, _ := os.Open("testdata/sampledata.zip")
 	defer f.Close()
 
 	// We will receive fragments on this channel
@@ -642,17 +646,19 @@ func ExampleNewSplitter_file() {
 				if !ok {
 					return
 				}
-				fmt.Printf("Got fragment #%d, size %d, hash:%s, new:%t\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]), f.New)
 				if f.New {
+					fmt.Printf("Got NEW fragment #%d, size %d, hash:%s\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]))
 					// Insert payload into data store
+				} else {
+					fmt.Printf("Got OLD fragment #%d, size %d, hash:%s\n", f.N, len(f.Payload), hex.EncodeToString(f.Hash[:]))
 				}
 				// Add hash to list of hashes required to reconstruct the file.
 			}
 		}
 	}()
 
-	// Create a dynamic splitter with average size of 256 bytes.
-	w, _ := dedup.NewSplitter(ch, dedup.ModeDynamic, 4*256)
+	// Create a dynamic splitter with average size of 1024 bytes.
+	w, _ := dedup.NewSplitter(ch, dedup.ModeDynamic, 4*1024)
 
 	// Copy data to the splitter
 	_, _ = io.Copy(w, f)
@@ -662,12 +668,18 @@ func ExampleNewSplitter_file() {
 
 	// Wait for input to be received.
 	wg.Wait()
+
 	// OUTPUT:
-	// Got fragment #0, size 63, hash:e94cca23fbbec2018d254f653d610f33e5cf6991, new:true
-	// Got fragment #1, size 174, hash:2aa31f8fce1f2b2b39fe15306b9f9d63c19a3857, new:true
-	// Got fragment #2, size 364, hash:d47786c5918a1aa13d9a07768a18cb2aade6261d, new:true
-	// Got fragment #3, size 100, hash:8d7885317178fc20956f6f66e45dd7a1c5d4b931, new:true
-	// Got fragment #4, size 213, hash:0165c7b3e663366b15f53dcbec284f749f799c9f, new:true
+	// Got NEW fragment #0, size 893, hash:7f8455127e82f90ea7e97716ccaefa9317279b4b
+	// Got NEW fragment #1, size 559, hash:b554708bbfda24f1eb8fcd75a155d23bd36939d3
+	// Got NEW fragment #2, size 3482, hash:59bca870477e14e97ae8650e74ef52abcb6340e8
+	// Got NEW fragment #3, size 165, hash:6fb05a63e28a1bb2e880e051940f517115e7b16c
+	// Got NEW fragment #4, size 852, hash:6671826ffff6edd32951a0e774efccb5101ba629
+	// Got NEW fragment #5, size 3759, hash:0fae545a20195720d8e9bb9540069418d7db0873
+	// Got OLD fragment #6, size 3482, hash:59bca870477e14e97ae8650e74ef52abcb6340e8
+	// Got OLD fragment #7, size 165, hash:6fb05a63e28a1bb2e880e051940f517115e7b16c
+	// Got OLD fragment #8, size 852, hash:6671826ffff6edd32951a0e774efccb5101ba629
+	// Got NEW fragment #9, size 2380, hash:1507aa13e215517ce982b9235a0221018128ed4e
 }
 
 // This example will show how to write data to two files.
