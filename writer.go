@@ -61,10 +61,13 @@ const (
 	ModeDynamic = 1
 )
 
+// Fragment is a file fragment.
+// It is the data returned by the NewSplitter.
 type Fragment struct {
-	Hash    [HashSize]byte
-	Payload []byte
-	New     bool
+	Hash    [HashSize]byte // Hash of the fragment
+	Payload []byte         // Data of the fragment, will be nil if fragment isn't new.
+	New     bool           // Will be true, if the data hasn't been encountered before.
+	N       uint           // Sequencially incrementing number for each segment.
 }
 
 type writer struct {
@@ -261,6 +264,18 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer,
 	return w, nil
 }
 
+// NewSplitter will return a writer you can write data to,
+// and the file will be split into separate fragments.
+//
+// You must supply a fragment channel, that will output fragments for
+// the data you have written. The channel must accept data while you
+// write to the spliter.
+//
+// For each fragment the SHA-1 hash of the data section is returned.
+// For fragments that have not yet been found, the data is also returned.
+//
+// When you call Close on the returned Writer, the final fragments
+// will be sent and the channel will be closed.
 func NewSplitter(fragments chan<- Fragment, mode Mode, maxSize uint) (Writer, error) {
 	ncpu := runtime.GOMAXPROCS(0)
 	// For small block sizes we need to keep a pretty big buffer to keep input fed.
@@ -552,15 +567,16 @@ func (w *writer) blockStreamWriter() {
 	}
 }
 
-// blockWriter will write hashed blocks to the output channel
+// fragmentWriter will write hashed blocks to the output channel
 // and recycle the buffers.
 func (w *writer) fragmentWriter() {
 	defer close(w.exited)
 	defer close(w.frags)
-
+	n := uint(0)
 	for b := range w.write {
 		_ = <-b.hashDone
 		var f Fragment
+		f.N = n
 		copy(f.Hash[:], b.sha1Hash[:])
 		_, ok := w.index[b.sha1Hash]
 		if !ok {
@@ -572,6 +588,7 @@ func (w *writer) fragmentWriter() {
 		w.frags <- f
 		// Done, reinsert buffer
 		w.buffers <- b
+		n++
 	}
 }
 
