@@ -59,6 +59,14 @@ const (
 	// The size given indicates the maximum block size. Average size is usually maxSize/4.
 	// Minimum block size is maxSize/64.
 	ModeDynamic = 1
+
+	// Dynamic block size.
+	//
+	// This mode will create a deduplicator that will split the contents written
+	// to it into dynamically sized blocks.
+	// The size given indicates the maximum block size. Average size is usually maxSize/4.
+	// Minimum block size is maxSize/64.
+	ModeDynamicEntropy = 2
 )
 
 // Fragment is a file fragment.
@@ -154,16 +162,10 @@ func NewWriter(index io.Writer, blocks io.Writer, mode Mode, maxSize, maxMemory 
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
 		w.split = zw.split
-		/*
-			case ModeDynamicSignatures:
-				zw := newZpaqWriter(maxSize)
-				w.writer = zw.writeFile
-				w.split = zw.split
-			case ModeSignaturesOnly:
-				fw := &fixedWriter{}
-				w.writer = fileSplitOnly
-				w.split = fw.split
-		*/
+	case ModeDynamicEntropy:
+		zw := newEntropyWriter(maxSize)
+		w.writer = zw.write
+		w.split = zw.split
 	default:
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
@@ -305,6 +307,10 @@ func NewSplitter(fragments chan<- Fragment, mode Mode, maxSize uint) (Writer, er
 		w.split = fw.split
 	case ModeDynamic:
 		zw := newZpaqWriter(maxSize)
+		w.writer = zw.write
+		w.split = zw.split
+	case ModeDynamicEntropy:
+		zw := newEntropyWriter(maxSize)
 		w.writer = zw.write
 		w.split = zw.split
 	default:
@@ -752,4 +758,121 @@ func (z *zpaqWriter) split(w *writer) {
 	w.off = 0
 	z.h = 0
 	z.c1 = 0
+}
+
+// Split blocks based on entropy distribution.
+type entWriter struct {
+	h           uint32 // rolling hash for finding fragment boundaries
+	maxFragment int
+	minFragment int
+	maxHash     uint32
+	hist        [256]uint16 // histogram of current accumulated
+	histLen     int
+	avgHist     uint16
+}
+
+// Split blocks. Typically block size will be maxSize / 4
+// Minimum block size is maxSize/32.
+//
+// The break point is content dependent.
+// Any insertions, deletions, or edits that occur before the start of the 32+ byte dependency window
+// don't affect the break point.
+// This makes it likely for two files to still have identical fragments far away from any edits.
+func newEntropyWriter(maxSize uint) *entWriter {
+	fragment := math.Log2(float64(maxSize) / (64 * 64))
+	mh := math.Exp2(22 - fragment)
+	e := &entWriter{
+		maxFragment: int(maxSize),
+		minFragment: int(maxSize / 32),
+		maxHash:     uint32(mh),
+	}
+	if e.minFragment > 65535 {
+		e.minFragment = 65535
+	}
+	if e.minFragment < 512 {
+		e.minFragment = 512
+	}
+	e.avgHist = uint16(e.minFragment / 255)
+	return e
+}
+
+// h is a 32 bit hash that depends on the last 32 bytes that were mispredicted by the order 1 model o1[].
+// h < maxhash therefore occurs with probability 2^-16, giving an average fragment size of 64K.
+// The variable size dependency window works because one constant is odd (correct prediction, no shift),
+// and the other is even but not a multiple of 4 (missed prediction, 1 bit shift left).
+// This is different from a normal Rabin filter, which uses a large fixed-sized dependency window
+// and two multiply operations, one at the window entry and the inverse at the window exit.
+func (e *entWriter) write(w *writer, b []byte) (int, error) {
+	inLen := len(b)
+	if e.histLen < e.minFragment {
+		b2 := b
+		if len(b2)+e.histLen > e.minFragment {
+			b2 = b2[:e.minFragment-e.histLen]
+		}
+		for i := range b2 {
+			e.hist[b[i]]++
+		}
+		e.histLen += len(b2)
+		b = b[len(b2):]
+	}
+	if len(b) == 0 {
+		return inLen, nil
+	}
+
+	// Transfer to local variables ~30% faster.
+	h := e.h
+	off := w.off
+	for _, c := range b {
+		if e.hist[c] >= e.avgHist {
+			h = (h + uint32(c) + 1) * 314159265
+		} else {
+			h = (h + uint32(c) + 1) * 271828182
+		}
+		w.cur[off] = c
+		off++
+
+		// At a break point? Send it off!
+		if (off >= e.minFragment && h < e.maxHash) || off >= e.maxFragment {
+			b := <-w.buffers
+			// Swap block with current
+			w.cur, b.data = b.data[:w.maxSize], w.cur[:off]
+			b.N = w.nblocks
+
+			w.input <- b
+			w.write <- b
+			e.histLen = 0
+			for i := range e.hist {
+				e.hist[i] = 0
+			}
+			w.nblocks++
+			off = 0
+			h = 0
+		}
+	}
+	w.off = off
+	e.h = h
+	return inLen, nil
+}
+
+// Split content, so a new block begins with next write
+func (e *entWriter) split(w *writer) {
+	if w.off == 0 {
+		return
+	}
+	b := <-w.buffers
+	// Swap block with current
+	w.cur, b.data = b.data[:w.maxSize], w.cur[:w.off]
+	w.mu.Lock()
+	b.N = w.nblocks
+	w.nblocks++
+	w.mu.Unlock()
+
+	w.input <- b
+	w.write <- b
+	w.off = 0
+	e.h = 0
+	e.histLen = 0
+	for i := range e.hist {
+		e.hist[i] = 0
+	}
 }
