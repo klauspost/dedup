@@ -235,6 +235,9 @@ func NewStreamWriter(out io.Writer, mode Mode, maxSize, maxMemory uint) (Writer,
 	case ModeDynamic:
 		zw := newZpaqWriter(maxSize)
 		w.writer = zw.write
+	case ModeDynamicEntropy:
+		zw := newEntropyWriter(maxSize)
+		w.writer = zw.write
 		/*	case ModeDynamicSignatures:
 				zw := newZpaqWriter(maxSize)
 				w.writer = zw.writeFile
