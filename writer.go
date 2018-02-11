@@ -320,6 +320,11 @@ func NewSplitter(fragments chan<- Fragment, mode Mode, maxSize uint) (Writer, er
 		return nil, fmt.Errorf("dedup: unknown mode")
 	}
 
+	w.flush = func(w *writer) error {
+		w.split(w)
+		return w.err
+	}
+
 	if w.maxSize < MinBlockSize {
 		return nil, ErrSizeTooSmall
 	}
@@ -812,10 +817,14 @@ func (e *entWriter) write(w *writer, b []byte) (int, error) {
 		if len(b2)+e.histLen > e.minFragment {
 			b2 = b2[:e.minFragment-e.histLen]
 		}
+		off := w.off
 		for i := range b2 {
-			e.hist[b[i]]++
+			v := b2[i]
+			e.hist[v]++
+			w.cur[off+i] = v
 		}
 		e.histLen += len(b2)
+		w.off += len(b2)
 		b = b[len(b2):]
 	}
 	if len(b) == 0 {

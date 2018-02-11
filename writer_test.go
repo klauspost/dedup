@@ -119,7 +119,66 @@ func TestFixedWriterLimit(t *testing.T) {
 	r.Close()
 }
 
-func TestFixedFragment(t *testing.T) {
+func TestFixedFragmentSplitter(t *testing.T) {
+	const totalinput = 10<<20 + 500
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	out := make(chan dedup.Fragment, 10)
+	count := make(chan int, 0)
+	go func() {
+		n := 0
+		off := 0
+		for f := range out {
+			if !bytes.Equal(b[off:off+len(f.Payload)], f.Payload) {
+				panic(fmt.Sprintf("output mismatch at offset %d", n))
+			}
+			off += len(f.Payload)
+			if f.New {
+				n += len(f.Payload)
+			}
+		}
+		count <- n
+		count <- off
+	}()
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewSplitter(out, dedup.ModeFixed, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	datalen := <-count
+	gotLen := <-count
+	removed := ((totalinput) - datalen) / size
+
+	if gotLen != totalinput {
+		t.Fatalf("did not get all data, want %d, got %d", totalinput, gotLen)
+	}
+	t.Log("Data size:", datalen)
+	t.Log("Removed", removed, "blocks")
+	// We should get at least 50 blocks
+	if removed < 50 {
+		t.Fatal("didn't remove at least 50 blocks")
+	}
+	if removed > 60 {
+		t.Fatal("removed unreasonable high amount of blocks")
+	}
+}
+
+func TestDynamicFragmentSplitter(t *testing.T) {
 	const totalinput = 10 << 20
 	input := getBufferSize(totalinput)
 
@@ -137,15 +196,21 @@ func TestFixedFragment(t *testing.T) {
 	count := make(chan int, 0)
 	go func() {
 		n := 0
+		off := 0
 		for f := range out {
+			if !bytes.Equal(b[off:off+len(f.Payload)], f.Payload) {
+				panic(fmt.Sprintf("output mismatch at offset %d", n))
+			}
+			off += len(f.Payload)
 			if f.New {
 				n += len(f.Payload)
 			}
 		}
 		count <- n
+		count <- off
 	}()
 	input = bytes.NewBuffer(b)
-	w, err := dedup.NewSplitter(out, dedup.ModeFixed, size)
+	w, err := dedup.NewSplitter(out, dedup.ModeDynamic, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +220,75 @@ func TestFixedFragment(t *testing.T) {
 		t.Fatal(err)
 	}
 	datalen := <-count
+	gotLen := <-count
 	removed := ((totalinput) - datalen) / size
 
+	if gotLen != totalinput {
+		t.Fatalf("did not get all data, want %d, got %d", totalinput, gotLen)
+	}
 	t.Log("Data size:", datalen)
 	t.Log("Removed", removed, "blocks")
 	// We should get at least 50 blocks
-	if removed < 50 {
+	if removed < 45 {
+		t.Fatal("didn't remove at least 45 blocks")
+	}
+	if removed > 60 {
+		t.Fatal("removed unreasonable high amount of blocks")
+	}
+}
+
+func TestDynamicEntropySplitter(t *testing.T) {
+	const totalinput = 10 << 20
+	input := getBufferSize(totalinput)
+
+	const size = 64 << 10
+	b := input.Bytes()
+	// Create some duplicates
+	for i := 0; i < 50; i++ {
+		// Read from 10 first blocks
+		src := b[(i%10)*size : (i%10)*size+size]
+		// Write into the following ones
+		dst := b[(10+i)*size : (i+10)*size+size]
+		copy(dst, src)
+	}
+	out := make(chan dedup.Fragment, 10)
+	count := make(chan int, 0)
+	go func() {
+		n := 0
+		off := 0
+		for f := range out {
+			if !bytes.Equal(b[off:off+len(f.Payload)], f.Payload) {
+				panic(fmt.Sprintf("output mismatch at offset %d", n))
+			}
+			off += len(f.Payload)
+			if f.New {
+				n += len(f.Payload)
+			}
+		}
+		count <- n
+		count <- off
+	}()
+	input = bytes.NewBuffer(b)
+	w, err := dedup.NewSplitter(out, dedup.ModeDynamic, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(w, input)
+	err = w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	datalen := <-count
+	gotLen := <-count
+	removed := ((totalinput) - datalen) / size
+
+	if gotLen != totalinput {
+		t.Fatalf("did not get all data, want %d, got %d", totalinput, gotLen)
+	}
+	t.Log("Data size:", datalen)
+	t.Log("Removed", removed, "blocks")
+	// We should get at least 45 blocks
+	if removed < 45 {
 		t.Fatal("didn't remove at least 50 blocks")
 	}
 	if removed > 60 {
@@ -704,7 +832,7 @@ func ExampleNewSplitter() {
 	}()
 
 	// This is our input:
-	input := bytes.NewBuffer(make([]byte, 50000))
+	input := bytes.NewBuffer(make([]byte, 50050))
 
 	// Create a new writer, with each block being 1000 bytes,
 	w, err := dedup.NewSplitter(out, dedup.ModeFixed, 1000)
@@ -722,10 +850,11 @@ func ExampleNewSplitter() {
 
 	// Let us inspect what was written:
 	fmt.Println("Blocks:", <-info)
+	// Size of one (repeated) block + 50 bytes for last.
 	fmt.Println("Data size:", <-info)
 
-	// OUTPUT: Blocks: 50
-	// Data size: 1000
+	// OUTPUT: Blocks: 51
+	// Data size: 1050
 }
 
 // This will deduplicate a file
@@ -784,6 +913,7 @@ func ExampleNewSplitter_file() {
 	// Got OLD fragment #7, size 165, hash:6fb05a63e28a1bb2e880e051940f517115e7b16c
 	// Got OLD fragment #8, size 852, hash:6671826ffff6edd32951a0e774efccb5101ba629
 	// Got NEW fragment #9, size 2380, hash:1507aa13e215517ce982b9235a0221018128ed4e
+	// Got NEW fragment #10, size 71, hash:f262fcf4af26ee75ff3045db2af21f2acca235cd
 }
 
 // This will deduplicate a file
@@ -832,17 +962,18 @@ func ExampleNewSplitter_entropy() {
 	wg.Wait()
 
 	// OUTPUT:
-	// Got NEW fragment #0, size 646, hash:5435bfaa1d5c9301798fdfea3112c94306e2cdf3
-	// Got NEW fragment #1, size 926, hash:a3251db1c56347e4c7b245f35fc4c9b034418900
-	// Got NEW fragment #2, size 919, hash:9d68759ef33ae919b656faf52bb1177e803f810b
-	// Got NEW fragment #3, size 1326, hash:c272c26dff010417ca2120a8e82addfdadb4efeb
-	// Got NEW fragment #4, size 1284, hash:9bbe891ccb1b141e0e122110e730e8df9743331e
-	// Got NEW fragment #5, size 1220, hash:5019f56fa9395060fbe2e957ad518a35cd667f9b
-	// Got NEW fragment #6, size 3509, hash:e0d7c8acfdd5b399a92b5e495a0794ffa842ee73
-	// Got OLD fragment #7, size 919, hash:9d68759ef33ae919b656faf52bb1177e803f810b
-	// Got OLD fragment #8, size 1326, hash:c272c26dff010417ca2120a8e82addfdadb4efeb
-	// Got OLD fragment #9, size 1284, hash:9bbe891ccb1b141e0e122110e730e8df9743331e
-	// Got OLD fragment #10, size 1220, hash:5019f56fa9395060fbe2e957ad518a35cd667f9b
+	//Got NEW fragment #0, size 521, hash:0c5989843e85f31aed26f249bd203240dd72f77a
+	//Got NEW fragment #1, size 1563, hash:308ff2e0b4776c2a08fe549422c7ebfbf646bb22
+	//Got NEW fragment #2, size 919, hash:9d68759ef33ae919b656faf52bb1177e803f810b
+	//Got NEW fragment #3, size 1326, hash:c272c26dff010417ca2120a8e82addfdadb4efeb
+	//Got NEW fragment #4, size 1284, hash:9bbe891ccb1b141e0e122110e730e8df9743331e
+	//Got NEW fragment #5, size 1220, hash:5019f56fa9395060fbe2e957ad518a35cd667f9b
+	//Got NEW fragment #6, size 3509, hash:e0d7c8acfdd5b399a92b5e495a0794ffa842ee73
+	//Got OLD fragment #7, size 919, hash:9d68759ef33ae919b656faf52bb1177e803f810b
+	//Got OLD fragment #8, size 1326, hash:c272c26dff010417ca2120a8e82addfdadb4efeb
+	//Got OLD fragment #9, size 1284, hash:9bbe891ccb1b141e0e122110e730e8df9743331e
+	//Got OLD fragment #10, size 1220, hash:5019f56fa9395060fbe2e957ad518a35cd667f9b
+	//Got NEW fragment #11, size 1569, hash:5ae2760535662c13b336d1ae4a0a7fdcba789d83
 }
 
 // This example will show how to write data to two files.
